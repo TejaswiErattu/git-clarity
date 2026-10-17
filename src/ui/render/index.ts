@@ -4,6 +4,7 @@
  */
 
 import { RepoSnapshot } from '../../git/types';
+import { AssistantState } from '../assistantController';
 import { renderActivity } from './activity';
 import { renderAssistant } from './assistant';
 import { renderBranches } from './branches';
@@ -29,8 +30,8 @@ export interface DashboardState {
 	/** undefined when no workspace folder is open. */
 	snapshot: RepoSnapshot | undefined;
 	activeTab: TabId;
-	/** What the user has typed into the Assistant box, kept across refreshes. */
-	assistantInput: string;
+	/** Assistant tab: typed input (kept across refreshes), matched intent, plan, result and phase. */
+	assistant: AssistantState;
 	/** Acknowledged Secret Guard findings in this workspace. */
 	acknowledgedCount: number;
 }
@@ -59,7 +60,7 @@ function renderTab(state: DashboardState, snapshot: RepoSnapshot): string {
 		case 'activity':
 			return renderActivity(snapshot);
 		case 'assistant':
-			return renderAssistant(state.assistantInput);
+			return renderAssistant(state.assistant);
 		case 'safety':
 			return renderSafety(state.acknowledgedCount);
 	}
