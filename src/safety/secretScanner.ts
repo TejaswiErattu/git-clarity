@@ -117,7 +117,7 @@ function normalizePath(filePath: string): string {
 	return filePath.replace(/\\/g, '/');
 }
 
-function shouldSkipFile(relativePath: string): boolean {
+export function shouldSkipFile(relativePath: string): boolean {
 	const normalized = normalizePath(relativePath);
 	const segments = normalized.split('/');
 	if (segments.some(segment => SKIP_DIR_NAMES.has(segment))) {
@@ -193,6 +193,15 @@ function scanLine(
 	return findings;
 }
 
+/** Scan already-numbered lines. Callers decide which lines count (a diff hunk, or a whole file). */
+export function scanLines(relativePath: string, lines: { line: number; text: string }[]): SecretFinding[] {
+	const findings: SecretFinding[] = [];
+	for (const entry of lines) {
+		findings.push(...scanLine(relativePath, entry.line, entry.text));
+	}
+	return findings;
+}
+
 export function scanFile(cwd: string, relativePath: string): SecretFinding[] {
 	if (shouldSkipFile(relativePath)) {
 		return [];
@@ -215,14 +224,8 @@ export function scanFile(cwd: string, relativePath: string): SecretFinding[] {
 		return [];
 	}
 
-	const findings: SecretFinding[] = [];
 	const lines = content.split(/\r?\n/);
-
-	for (let index = 0; index < lines.length; index++) {
-		findings.push(...scanLine(relativePath, index + 1, lines[index] ?? ''));
-	}
-
-	return findings;
+	return scanLines(relativePath, lines.map((text, index) => ({ line: index + 1, text: text ?? '' })));
 }
 
 export function collectScanTargets(snapshot: RepoSnapshot): string[] {

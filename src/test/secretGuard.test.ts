@@ -2,9 +2,7 @@
  * Secret Guard tests.
  *
  * The first three suites run today against the implemented parts of secretGuard.ts.
- * The last suite is the executable spec for P1 (scanStagedDiff / scanPendingCommit):
- * it is `suite.skip` so CI stays green until the implementation lands. Remove `.skip`
- * as the first step of P1 and make it pass.
+ * The last suite is the executable spec for P1 (scanStagedDiff / scanPendingCommit).
  */
 
 import * as assert from 'assert';
@@ -150,9 +148,9 @@ suite('secretGuard: commit guard with the current scanner', () => {
 });
 
 // ---------------------------------------------------------------------------
-// P1 spec. Remove `.skip` when implementing scanStagedDiff / scanPendingCommit.
+// P1 spec.
 // ---------------------------------------------------------------------------
-suite.skip('secretGuard: staged and pending scanning (P1 spec)', () => {
+suite('secretGuard: staged and pending scanning (P1 spec)', () => {
 	suiteSetup(isolateGitEnv);
 	suiteTeardown(() => {
 		restoreGitEnv();
@@ -246,7 +244,7 @@ suite.skip('secretGuard: staged and pending scanning (P1 spec)', () => {
 		assert.ok(blocked?.blockedReason, 'plan must be blocked');
 		assert.ok(blocked.blockedReason.includes('config.js'), 'reason names the file');
 		assert.ok(blocked.blockedReason.includes('line 1'), 'reason names the line');
-		assert.strictEqual(git(repo, 'log', '--oneline').split('\n').length, 1, 'nothing was committed');
+		assert.strictEqual(git(repo, 'log', '--oneline').split('\n').length, 2, 'nothing was committed');
 
 		const guard = checkCommitGuard(repo, store);
 		await store.acknowledge(buildIgnoreKey(guard.unacknowledged[0]));

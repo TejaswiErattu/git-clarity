@@ -10,8 +10,8 @@
  *   buildIgnoreKey, fixGuidanceFor, createAcknowledgedStore, createInMemoryAcknowledgedStore,
  *   addToGitignore, checkCommitGuard (correct as soon as the scan functions are real).
  *
- * Stubs that return "nothing found" until P1 lands:
- *   scanStagedDiff, scanPendingCommit  -> see TODO(P1) below.
+ * Scanning:
+ *   scanStagedDiff, scanPendingCommit.
  *
  * Design rules (from the Oct 1 plan):
  *   - Scan the diff, not whole files: only lines that are about to leave the machine count.
@@ -21,14 +21,148 @@
  *   - Never silently allow, never permanently block.
  */
 
+import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { SecretFinding, SecretScanResult } from './secretScanner';
+import { SecretFinding, SecretScanResult, scanLines, shouldSkipFile } from './secretScanner';
 
 // ---------------------------------------------------------------------------
-// Scanning  (TODO(P1): Thanishka)
+// Scanning
 // ---------------------------------------------------------------------------
+
+interface NumberedLine {
+	line: number;
+	text: string;
+}
+
+interface ParsedDiffFile {
+	path: string;
+	added: NumberedLine[];
+	/** Set once a hunk header has been seen, so '+++' inside a hunk stays an added line. */
+	inHunk: boolean;
+	newLine: number;
+}
+
+/** Same argv shape as runGitArgs, without importing the actions layer. Stdout is not trimmed. */
+function runGit(cwd: string, args: string[]): string {
+	return execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+}
+
+function hasHead(cwd: string): boolean {
+	try {
+		execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function nulPaths(output: string): string[] {
+	return output.split('\0').filter(entry => entry.length > 0);
+}
+
+/** `+++ b/path` (or a quoted form). `/dev/null` is a deletion and has no new path. */
+function destinationPath(header: string): string {
+	let raw = header.trim();
+	if (raw.startsWith('"') && raw.endsWith('"')) {
+		raw = raw.slice(1, -1);
+	}
+	if (raw === '/dev/null') {
+		return '';
+	}
+	return raw.startsWith('b/') ? raw.slice(2) : raw;
+}
+
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/**
+ * Added lines only, with the line number in the new file.
+ * `--unified=0` emits no context lines; a space line would still advance the counter.
+ */
+function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
+	const files: ParsedDiffFile[] = [];
+	let current: ParsedDiffFile | undefined;
+
+	for (const line of diff.split('\n')) {
+		if (line.startsWith('diff --git ')) {
+			current = { path: '', added: [], inHunk: false, newLine: 0 };
+			files.push(current);
+			continue;
+		}
+		if (!current) {
+			continue;
+		}
+		if (line.startsWith('Binary files ')) {
+			current.inHunk = false;
+			continue;
+		}
+		if (!current.inHunk && line.startsWith('+++ ')) {
+			current.path = destinationPath(line.slice(4));
+			continue;
+		}
+		const hunk = HUNK_HEADER.exec(line);
+		if (hunk) {
+			current.inHunk = true;
+			current.newLine = Number(hunk[1]);
+			continue;
+		}
+		if (!current.inHunk) {
+			continue;
+		}
+		if (line.startsWith('+')) {
+			current.added.push({ line: current.newLine, text: line.slice(1) });
+			current.newLine++;
+		} else if (line.startsWith(' ')) {
+			current.newLine++;
+		}
+	}
+
+	return files;
+}
+
+function sortFindings(findings: SecretFinding[]): SecretFinding[] {
+	return findings.sort((a, b) => {
+		const fileCompare = a.file.localeCompare(b.file);
+		return fileCompare !== 0 ? fileCompare : a.line - b.line;
+	});
+}
+
+function scanResult(scannedFileCount: number, findings: SecretFinding[]): SecretScanResult {
+	return {
+		scannedFileCount,
+		findings: sortFindings(findings),
+		scannedAt: new Date().toISOString()
+	};
+}
+
+/** Every line of a working-tree file, numbered from 1. Caller has already applied shouldSkipFile. */
+function scanWholeFile(cwd: string, relativePath: string): SecretFinding[] {
+	let content: string;
+	try {
+		content = fs.readFileSync(path.join(cwd, relativePath), 'utf8');
+	} catch {
+		return [];
+	}
+	if (content.length > 512_000 || content.includes('\u0000')) {
+		return [];
+	}
+	const lines = content.split('\n').map((text, index) => ({ line: index + 1, text }));
+	return scanLines(relativePath, lines);
+}
+
+function findingsFromDiff(diff: string): { fileCount: number; paths: string[]; findings: SecretFinding[] } {
+	const files = parseUnifiedDiff(diff);
+	const findings: SecretFinding[] = [];
+	const paths: string[] = [];
+	for (const file of files) {
+		if (file.path.length > 0) {
+			paths.push(file.path);
+			findings.push(...scanLines(file.path, file.added));
+		}
+	}
+	return { fileCount: files.length, paths, findings };
+}
 
 /**
  * Scan only the lines that are staged.
@@ -43,9 +177,9 @@ import { SecretFinding, SecretScanResult } from './secretScanner';
  *   - `scannedFileCount` is the number of files that appeared in the diff.
  */
 export function scanStagedDiff(cwd: string): SecretScanResult {
-	// TODO(P1): implement. Stub: nothing is staged.
-	void cwd;
-	return { scannedFileCount: 0, findings: [], scannedAt: new Date().toISOString() };
+	const diff = runGit(cwd, ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color']);
+	const { fileCount, findings } = findingsFromDiff(diff);
+	return scanResult(fileCount, findings);
 }
 
 /**
@@ -59,9 +193,40 @@ export function scanStagedDiff(cwd: string): SecretScanResult {
  * tracked and untracked file as fully added.
  */
 export function scanPendingCommit(cwd: string): SecretScanResult {
-	// TODO(P1): implement. Stub: nothing pending.
-	void cwd;
-	return { scannedFileCount: 0, findings: [], scannedAt: new Date().toISOString() };
+	const findings: SecretFinding[] = [];
+	let scannedFileCount = 0;
+	const seen = new Set<string>();
+
+	if (hasHead(cwd)) {
+		const diff = runGit(cwd, ['-c', 'core.quotePath=false', 'diff', 'HEAD', '--unified=0', '--no-color']);
+		const parsed = findingsFromDiff(diff);
+		scannedFileCount += parsed.fileCount;
+		for (const filePath of parsed.paths) {
+			seen.add(filePath);
+		}
+		findings.push(...parsed.findings);
+	} else {
+		for (const relativePath of nulPaths(runGit(cwd, ['ls-files', '-z']))) {
+			if (shouldSkipFile(relativePath) || seen.has(relativePath)) {
+				continue;
+			}
+			seen.add(relativePath);
+			scannedFileCount++;
+			findings.push(...scanWholeFile(cwd, relativePath));
+		}
+	}
+
+	const untracked = nulPaths(runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']));
+	for (const relativePath of untracked) {
+		if (shouldSkipFile(relativePath) || seen.has(relativePath)) {
+			continue;
+		}
+		seen.add(relativePath);
+		scannedFileCount++;
+		findings.push(...scanWholeFile(cwd, relativePath));
+	}
+
+	return scanResult(scannedFileCount, findings);
 }
 
 // ---------------------------------------------------------------------------
