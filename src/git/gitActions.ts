@@ -15,8 +15,9 @@
  */
 
 import { execFileSync } from 'child_process';
-import { RepoSnapshot } from './gitCommands';
+import { RepoSnapshot } from './types';
 import { IntentId, IntentMatch } from '../assistant/intentMatcher';
+import { AcknowledgedStore, checkCommitGuard, createInMemoryAcknowledgedStore } from '../safety/secretGuard';
 
 export type RiskLevel = 'safe' | 'careful' | 'risky';
 
@@ -42,6 +43,15 @@ export interface GitActionResult {
 	success: boolean;
 	summary: string;
 	details?: string;
+}
+
+export interface ActionPlanOptions {
+	/**
+	 * Secret Guard acknowledgements. Pass the store built from context.workspaceState
+	 * to BOTH buildActionPlan and executeAction, or the execute-time re-check will
+	 * block a commit the user already acknowledged. Defaults to an empty store.
+	 */
+	acknowledged?: AcknowledgedStore;
 }
 
 /** Maps risk levels to the exact beginner-friendly badge text (never low/medium/high). */
@@ -89,7 +99,7 @@ function planHistory(snapshot: RepoSnapshot): ActionPlan {
 	};
 }
 
-function planCommit(match: IntentMatch, snapshot: RepoSnapshot): ActionPlan {
+function planCommit(match: IntentMatch, cwd: string, snapshot: RepoSnapshot, options?: ActionPlanOptions): ActionPlan {
 	const base = {
 		intentId: 'commit' as const,
 		title: 'Save your changes (commit)',
@@ -118,11 +128,22 @@ function planCommit(match: IntentMatch, snapshot: RepoSnapshot): ActionPlan {
 		};
 	}
 
-	return {
-		...base,
-		commands: ['git add -A', `git commit -m "${match.message}"`],
-		affected: snapshot.changedFiles.map(f => f.path)
-	};
+	const commands = ['git add -A', `git commit -m "${match.message}"`];
+	const affected = snapshot.changedFiles.map(f => f.path);
+
+	// Secret Guard: the commit stages everything, so check everything that would be committed.
+	const guard = checkCommitGuard(cwd, options?.acknowledged ?? createInMemoryAcknowledgedStore());
+	if (guard.blocked) {
+		return {
+			...base,
+			commands,
+			affected,
+			warnings: ['Secret Guard found something that looks like a real key in the files this would save.'],
+			blockedReason: guard.blockedReason
+		};
+	}
+
+	return { ...base, commands, affected };
 }
 
 function planUndoLastCommit(snapshot: RepoSnapshot): ActionPlan {
@@ -305,15 +326,12 @@ function planPull(snapshot: RepoSnapshot): ActionPlan {
  * Builds the plan for a matched intent, including any blockedReason. Never
  * runs anything. Returns undefined when there is no intent to plan for.
  */
-export function buildActionPlan(match: IntentMatch, cwd: string, snapshot: RepoSnapshot): ActionPlan | undefined {
-	// cwd is accepted for API symmetry with executeAction and future intents
-	// that may need extra read-only lookups; current plans only need the
-	// already-fetched snapshot.
-	void cwd;
+export function buildActionPlan(match: IntentMatch, cwd: string, snapshot: RepoSnapshot, options?: ActionPlanOptions): ActionPlan | undefined {
+	// Planning must stay read-only: Secret Guard runs `git diff`, nothing that writes.
 	switch (match.intentId) {
 		case 'status': return planStatus(snapshot);
 		case 'history': return planHistory(snapshot);
-		case 'commit': return planCommit(match, snapshot);
+		case 'commit': return planCommit(match, cwd, snapshot, options);
 		case 'undoLastCommit': return planUndoLastCommit(snapshot);
 		case 'discardChanges': return planDiscardChanges(snapshot);
 		case 'newBranch': return planNewBranch(match, snapshot);
@@ -391,7 +409,7 @@ function friendlyError(action: string, err: unknown): GitActionResult {
  * Runs the intent's git command(s) for real. Only call this after the user
  * has pressed Confirm on an unblocked plan.
  */
-export function executeAction(match: IntentMatch, cwd: string): GitActionResult {
+export function executeAction(match: IntentMatch, cwd: string, options?: ActionPlanOptions): GitActionResult {
 	switch (match.intentId) {
 		case 'status': {
 			try {
@@ -412,6 +430,11 @@ export function executeAction(match: IntentMatch, cwd: string): GitActionResult 
 		case 'commit': {
 			if (!match.message) {
 				return { success: false, summary: 'A commit message is required.', details: 'Type a short message describing what changed and try again.' };
+			}
+			// Re-check at execute time so the UI can never bypass Secret Guard.
+			const guard = checkCommitGuard(cwd, options?.acknowledged ?? createInMemoryAcknowledgedStore());
+			if (guard.blocked) {
+				return { success: false, summary: 'Saving was stopped by Secret Guard.', details: guard.blockedReason };
 			}
 			try {
 				runGitArgs(cwd, ['add', '-A']);

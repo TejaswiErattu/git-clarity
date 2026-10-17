@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ChangedFile, RepoSnapshot } from '../git/gitCommands';
+import { ChangedFile, RepoSnapshot } from '../git/types';
 
 export type SecretSeverity = 'high' | 'medium' | 'low';
 
