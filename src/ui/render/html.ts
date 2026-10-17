@@ -126,25 +126,104 @@ input[type="text"]::placeholder { color: var(--vscode-input-placeholderForegroun
 .empty { text-align: center; padding: 40px 16px; max-width: 520px; margin: 0 auto; }
 .empty-icon { font-size: 2.4em; margin-bottom: 8px; }
 .empty p { color: var(--vscode-descriptionForeground); }
+h3 { font-size: 0.95em; margin: 12px 0 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.chip {
+	font: inherit;
+	font-size: 0.92em;
+	padding: 3px 10px;
+	border-radius: 12px;
+	border: 1px solid var(--vscode-button-border, var(--vscode-panel-border, transparent));
+	color: var(--vscode-button-secondaryForeground);
+	background: var(--vscode-button-secondaryBackground);
+	cursor: pointer;
+}
+.chip:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.risk {
+	display: inline-block;
+	font-weight: 600;
+	font-size: 0.85em;
+	padding: 1px 10px;
+	border-radius: 10px;
+	border: 1px solid currentColor;
+	margin-right: 6px;
+}
+.risk-safe { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+.risk-careful { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.risk-risky { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+pre {
+	margin: 0 0 8px;
+	padding: 8px 10px;
+	border-radius: 4px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	background: var(--vscode-textCodeBlock-background, transparent);
+	font-family: var(--vscode-editor-font-family, monospace);
+}
+.plan-section ul { margin: 0 0 8px; padding-left: 20px; }
+.notice, .blocked {
+	padding: 8px 10px;
+	border-radius: 4px;
+	border-left: 3px solid var(--vscode-editorWarning-foreground, currentColor);
+	background: var(--vscode-inputValidation-warningBackground, transparent);
+}
+.blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
+.result-fail { color: var(--vscode-errorForeground); }
+.actions { margin-top: 12px; }
 `;
 }
 
 /**
- * The only script on the page. It forwards three messages to the extension:
- *   setTab  { tab }                      a tab button was clicked
- *   refresh {}                           the refresh button was clicked
- *   focus   { focused, assistantInput }  an input gained or lost focus (blur carries its value)
+ * The only script on the page. It forwards messages to the extension and never runs Git:
+ *   setTab           { tab }                      a tab button was clicked
+ *   refresh          {}                           the refresh button was clicked
+ *   focus            { focused, assistantInput }  an input gained or lost focus (blur carries its value)
+ *   assistantAsk     { text }                     Ask, Enter in the box, or an auto-submit chip
+ *   assistantConfirm { previewId }                Confirm on the preview with that id
+ *   assistantCancel  {}                           Cancel, or "Ask something else"
+ * A chip that needs more typing only fills the box and focuses it.
  */
 export function clientScript(): string {
 	return `
 (function () {
 	var vscode = acquireVsCodeApi();
+	function assistantBox() { return document.querySelector('input[data-input="assistant"]'); }
+	function ask(text) {
+		var box = assistantBox();
+		if (box) { box.blur(); }
+		vscode.postMessage({ type: 'assistantAsk', text: text });
+	}
+	function fillBox(text) {
+		var box = assistantBox();
+		if (!box) { return; }
+		box.value = text;
+		box.focus();
+		box.setSelectionRange(text.length, text.length);
+	}
 	document.addEventListener('click', function (event) {
-		var target = event.target instanceof Element ? event.target.closest('[data-tab],[data-action]') : null;
-		if (!target) { return; }
+		var target = event.target instanceof Element ? event.target.closest('[data-tab],[data-action],[data-chip-text]') : null;
+		if (!target || target.hasAttribute('disabled')) { return; }
 		var tab = target.getAttribute('data-tab');
 		if (tab) { vscode.postMessage({ type: 'setTab', tab: tab }); return; }
-		if (target.getAttribute('data-action') === 'refresh') { vscode.postMessage({ type: 'refresh' }); }
+		var chipText = target.getAttribute('data-chip-text');
+		if (chipText !== null) {
+			if (target.getAttribute('data-chip-submit') === 'true') { ask(chipText); } else { fillBox(chipText); }
+			return;
+		}
+		var action = target.getAttribute('data-action');
+		if (action === 'refresh') { vscode.postMessage({ type: 'refresh' }); }
+		if (action === 'assistant-ask') { var box = assistantBox(); ask(box ? box.value : ''); }
+		if (action === 'assistant-confirm') {
+			vscode.postMessage({ type: 'assistantConfirm', previewId: Number(target.getAttribute('data-preview-id')) });
+		}
+		if (action === 'assistant-cancel') { vscode.postMessage({ type: 'assistantCancel' }); }
+	});
+	document.addEventListener('keydown', function (event) {
+		var el = event.target;
+		if (event.key === 'Enter' && el instanceof HTMLInputElement && el.getAttribute('data-input') === 'assistant') {
+			event.preventDefault();
+			ask(el.value);
+		}
 	});
 	document.addEventListener('focusin', function (event) {
 		if (event.target instanceof Element && event.target.hasAttribute('data-input')) {

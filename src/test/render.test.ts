@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { getRepoSnapshot } from '../git/gitCommands';
 import { ChangedFile, RepoSnapshot } from '../git/types';
+import { initialAssistantState } from '../ui/assistantController';
 import { DashboardState, renderDashboardHtml, TabId, TABS } from '../ui/render';
 import { escapeHtml } from '../ui/render/html';
 import { describeStatus, MAX_OVERVIEW_FILES } from '../ui/render/overview';
@@ -32,7 +33,7 @@ function makeSnapshot(overrides: Partial<RepoSnapshot> = {}): RepoSnapshot {
 }
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
-	return { snapshot: makeSnapshot(), activeTab: 'overview', assistantInput: '', acknowledgedCount: 0, ...overrides };
+	return { snapshot: makeSnapshot(), activeTab: 'overview', assistant: initialAssistantState(), acknowledgedCount: 0, ...overrides };
 }
 
 function render(overrides: Partial<DashboardState> = {}): string {
@@ -183,7 +184,7 @@ suite('render: dashboard HTML', () => {
 	});
 
 	test('the assistant input keeps what was typed, escaped', () => {
-		const html = render({ activeTab: 'assistant', assistantInput: 'save my "changes" <now>' });
+		const html = render({ activeTab: 'assistant', assistant: { ...initialAssistantState(), input: 'save my "changes" <now>' } });
 		assert.ok(html.includes('data-input="assistant"'));
 		assert.ok(html.includes('value="save my &quot;changes&quot; &lt;now&gt;"'));
 		assert.ok(!html.includes('value="save my "changes"'));

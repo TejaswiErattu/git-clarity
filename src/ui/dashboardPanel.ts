@@ -8,9 +8,11 @@
 
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
+import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
 import { AcknowledgedStore } from '../safety/secretGuard';
+import { ask, AssistantDeps, AssistantState, cancel, confirm, initialAssistantState } from './assistantController';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
 
 export const POLL_INTERVAL_MS = 4000;
@@ -18,7 +20,10 @@ export const POLL_INTERVAL_MS = 4000;
 type WebviewMessage =
 	| { type: 'setTab'; tab: unknown }
 	| { type: 'refresh' }
-	| { type: 'focus'; focused: boolean; assistantInput?: unknown };
+	| { type: 'focus'; focused: boolean; assistantInput?: unknown }
+	| { type: 'assistantAsk'; text: unknown }
+	| { type: 'assistantConfirm'; previewId: unknown }
+	| { type: 'assistantCancel' };
 
 export class DashboardPanel {
 	private static current: DashboardPanel | undefined;
@@ -26,7 +31,7 @@ export class DashboardPanel {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly timer: ReturnType<typeof setInterval>;
 	private activeTab: TabId = 'overview';
-	private assistantInput = '';
+	private assistant: AssistantState = initialAssistantState();
 	private inputFocused = false;
 	private snapshot: RepoSnapshot | undefined;
 	private lastRendered = '';
@@ -70,13 +75,56 @@ export class DashboardPanel {
 			case 'focus':
 				this.setInputFocused(message.focused, message.assistantInput);
 				return;
+			case 'assistantAsk':
+				if (typeof message.text === 'string') {
+					this.updateAssistant(ask(this.assistant, message.text, this.assistantDeps()));
+				}
+				return;
+			case 'assistantConfirm':
+				if (typeof message.previewId === 'number') {
+					this.confirmAssistant(message.previewId);
+				}
+				return;
+			case 'assistantCancel':
+				this.updateAssistant(cancel(this.assistant));
+				return;
+		}
+	}
+
+	/** Git access for the Assistant. The same acknowledged store goes to planning and execution. */
+	private assistantDeps(): AssistantDeps {
+		const acknowledged = this.store;
+		return {
+			cwd: this.workspaceFolder(),
+			readSnapshot: () => this.readSnapshot(),
+			buildPlan: (match, cwd, snapshot) => buildActionPlan(match, cwd, snapshot, { acknowledged }),
+			execute: (match, cwd) => executeAction(match, cwd, { acknowledged })
+		};
+	}
+
+	/** Assistant actions are explicit clicks, so they always render, even if the box still had focus. */
+	private updateAssistant(next: AssistantState): void {
+		this.assistant = next;
+		this.inputFocused = false;
+		this.render();
+	}
+
+	private confirmAssistant(previewId: number): void {
+		const next = confirm(this.assistant, previewId, this.assistantDeps());
+		const executed = next.phase === 'done' && next.result !== undefined && next !== this.assistant;
+		this.assistant = next;
+		this.inputFocused = false;
+		if (executed) {
+			this.refresh();
+		} else {
+			this.render();
 		}
 	}
 
 	private setInputFocused(focused: boolean, assistantInput: unknown): void {
 		this.inputFocused = focused;
 		if (typeof assistantInput === 'string') {
-			this.assistantInput = assistantInput;
+			this.assistant = { ...this.assistant, input: assistantInput };
 		}
 		if (!focused && this.renderPending) {
 			this.render();
@@ -94,8 +142,12 @@ export class DashboardPanel {
 		this.render();
 	}
 
+	private workspaceFolder(): string | undefined {
+		return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	}
+
 	private readSnapshot(): RepoSnapshot | undefined {
-		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const folder = this.workspaceFolder();
 		if (!folder) {
 			return undefined;
 		}
@@ -114,7 +166,7 @@ export class DashboardPanel {
 		const state: DashboardState = {
 			snapshot: this.snapshot,
 			activeTab: this.activeTab,
-			assistantInput: this.assistantInput,
+			assistant: this.assistant,
 			acknowledgedCount: this.store.keys().length
 		};
 		const serialized = JSON.stringify(state);
