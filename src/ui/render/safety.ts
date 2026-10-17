@@ -33,20 +33,32 @@ function details(f: SafetyFindingView): string {
 	].join('');
 }
 
+export interface FindingRenderOptions {
+	/** Show "Add to .gitignore" when the guidance allows it. Default true (Safety tab). */
+	gitignore?: boolean;
+	/** Show an explicit "Open file" button next to Acknowledge. Default false. */
+	openButton?: boolean;
+}
+
+function openButton(f: SafetyFindingView): string {
+	return `<button class="secondary" data-action="open-file" data-file="${escapeHtml(f.file)}" data-line="${f.line}">Open file</button>`;
+}
+
 function gitignoreButton(f: SafetyFindingView): string {
 	return f.canAddToGitignore
 		? `<button class="secondary" data-action="safety-gitignore" data-file="${escapeHtml(f.file)}">Add to .gitignore</button>`
 		: '';
 }
 
-function renderOpenFinding(f: SafetyFindingView): string {
+function renderOpenFinding(f: SafetyFindingView, options: FindingRenderOptions): string {
 	return (
 		`<article class="finding finding-${f.severity}">` +
 		`<div class="finding-head">${severityBadge(f)}<h3>${escapeHtml(f.title)}</h3>${location(f)}</div>` +
 		details(f) +
 		'<div class="row actions">' +
 		`<button class="primary" data-action="safety-ack" data-key="${escapeHtml(f.key)}">Acknowledge</button>` +
-		gitignoreButton(f) +
+		(options.openButton ? openButton(f) : '') +
+		(options.gitignore === false ? '' : gitignoreButton(f)) +
 		'</div>' +
 		'</article>'
 	);
@@ -65,8 +77,8 @@ function renderAcknowledgedFinding(f: SafetyFindingView): string {
 	);
 }
 
-export function renderFinding(f: SafetyFindingView): string {
-	return f.acknowledged ? renderAcknowledgedFinding(f) : renderOpenFinding(f);
+export function renderFinding(f: SafetyFindingView, options: FindingRenderOptions = {}): string {
+	return f.acknowledged ? renderAcknowledgedFinding(f) : renderOpenFinding(f, options);
 }
 
 function renderSection(title: string, intro: string, s: SafetySectionView): string {
@@ -76,7 +88,7 @@ function renderSection(title: string, intro: string, s: SafetySectionView): stri
 	} else if (s.findings.length === 0) {
 		body = `<p class="muted">No known secret patterns in ${plural(s.scannedFileCount, 'scanned file', 'scanned files')}.</p>`;
 	} else {
-		body = s.findings.map(renderFinding).join('');
+		body = s.findings.map(f => renderFinding(f)).join('');
 	}
 	return card(title, `<p class="muted">${escapeHtml(intro)}</p>${body}`);
 }

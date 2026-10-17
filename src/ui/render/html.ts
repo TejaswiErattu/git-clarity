@@ -170,6 +170,15 @@ pre {
 .blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
 .result-fail { color: var(--vscode-errorForeground); }
 .actions { margin-top: 12px; }
+.blocked-section {
+	border: 1px solid var(--vscode-errorForeground, currentColor);
+	border-left-width: 4px;
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 0 0 12px;
+	background: var(--vscode-inputValidation-errorBackground, transparent);
+}
+.blocked-section > h3 { color: var(--vscode-errorForeground); margin-top: 0; }
 .severity {
 	display: inline-block;
 	font-weight: 600;
@@ -217,6 +226,7 @@ button.link:hover { color: var(--vscode-textLink-activeForeground); }
  *   assistantAsk     { text }                     Ask, Enter in the box, or an auto-submit chip
  *   assistantConfirm { previewId }                Confirm on the preview with that id
  *   assistantCancel  {}                           Cancel, or "Ask something else"
+ *   assistantBackToPlan {}                        "Back to plan" on a Not saved result
  *   safetyAcknowledge / safetyUnacknowledge { key }   Acknowledge or Undo on a Secret Guard finding
  *   safetyAddToGitignore { file }                     Add to .gitignore on a finding that allows it
  *   openFile         { file, line }               a finding's file:line link
@@ -256,6 +266,7 @@ export function clientScript(): string {
 			vscode.postMessage({ type: 'assistantConfirm', previewId: Number(target.getAttribute('data-preview-id')) });
 		}
 		if (action === 'assistant-cancel') { vscode.postMessage({ type: 'assistantCancel' }); }
+		if (action === 'assistant-back') { vscode.postMessage({ type: 'assistantBackToPlan' }); }
 		if (action === 'safety-ack') { vscode.postMessage({ type: 'safetyAcknowledge', key: target.getAttribute('data-key') }); }
 		if (action === 'safety-unack') { vscode.postMessage({ type: 'safetyUnacknowledge', key: target.getAttribute('data-key') }); }
 		if (action === 'safety-gitignore') { vscode.postMessage({ type: 'safetyAddToGitignore', file: target.getAttribute('data-file') }); }
