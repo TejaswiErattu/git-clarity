@@ -7,13 +7,15 @@
  */
 
 import { randomBytes } from 'crypto';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
-import { AcknowledgedStore } from '../safety/secretGuard';
+import { AcknowledgedStore, addToGitignore } from '../safety/secretGuard';
 import { ask, AssistantDeps, AssistantState, cancel, confirm, initialAssistantState } from './assistantController';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
+import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyView } from './safetyModel';
 
 export const POLL_INTERVAL_MS = 4000;
 
@@ -23,7 +25,11 @@ type WebviewMessage =
 	| { type: 'focus'; focused: boolean; assistantInput?: unknown }
 	| { type: 'assistantAsk'; text: unknown }
 	| { type: 'assistantConfirm'; previewId: unknown }
-	| { type: 'assistantCancel' };
+	| { type: 'assistantCancel' }
+	| { type: 'safetyAcknowledge'; key: unknown }
+	| { type: 'safetyUnacknowledge'; key: unknown }
+	| { type: 'safetyAddToGitignore'; file: unknown }
+	| { type: 'openFile'; file: unknown; line: unknown };
 
 export class DashboardPanel {
 	private static current: DashboardPanel | undefined;
@@ -34,6 +40,7 @@ export class DashboardPanel {
 	private assistant: AssistantState = initialAssistantState();
 	private inputFocused = false;
 	private snapshot: RepoSnapshot | undefined;
+	private safety: SafetyView | undefined;
 	private lastRendered = '';
 	private renderPending = false;
 
@@ -66,6 +73,7 @@ export class DashboardPanel {
 			case 'setTab':
 				if (isTabId(message.tab)) {
 					this.activeTab = message.tab;
+					this.scanSafetyIfVisible();
 					this.render();
 				}
 				return;
@@ -88,6 +96,87 @@ export class DashboardPanel {
 			case 'assistantCancel':
 				this.updateAssistant(cancel(this.assistant));
 				return;
+			case 'safetyAcknowledge':
+				void this.setAcknowledged(message.key, true);
+				return;
+			case 'safetyUnacknowledge':
+				void this.setAcknowledged(message.key, false);
+				return;
+			case 'safetyAddToGitignore':
+				this.addFileToGitignore(message.file);
+				return;
+			case 'openFile':
+				void this.openFinding(message.file, message.line);
+				return;
+		}
+	}
+
+	// ---- Safety tab -------------------------------------------------------
+
+	/** Scans only while the Safety tab is showing, so the other tabs never pay for it. */
+	private scanSafetyIfVisible(notice?: string): void {
+		const cwd = this.workspaceFolder();
+		if (this.activeTab !== 'safety' || !cwd || !this.snapshot?.isRepo) {
+			return;
+		}
+		this.safety = { ...runSafetyScan(cwd, this.store), notice: notice ?? this.safety?.notice };
+	}
+
+	/** Acknowledge only a finding on screen; undo only a key that is actually acknowledged. */
+	private async setAcknowledged(key: unknown, acknowledged: boolean): Promise<void> {
+		if (typeof key !== 'string') {
+			return;
+		}
+		if (acknowledged && findFindingByKey(this.safety, key)) {
+			await this.store.acknowledge(key);
+		} else if (!acknowledged && this.store.isAcknowledged(key)) {
+			await this.store.unacknowledge(key);
+		} else {
+			return;
+		}
+		this.scanSafetyIfVisible();
+		this.render();
+	}
+
+	private addFileToGitignore(file: unknown): void {
+		const cwd = this.workspaceFolder();
+		if (typeof file !== 'string' || !cwd || !findGitignoreCandidate(this.safety, file)) {
+			return;
+		}
+		let notice: string;
+		try {
+			const result = addToGitignore(cwd, file);
+			notice = result.added ? `Added ${file} to .gitignore.` : `${file} is already in .gitignore.`;
+			const tracked = !this.snapshot?.changedFiles.some(f => f.path === file && f.status === '??');
+			if (tracked) {
+				notice += ' Git still tracks this file. .gitignore only stops new files from being added, so ask a teammate how to stop tracking it.';
+			}
+		} catch (err) {
+			notice = `Couldn't update .gitignore: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		this.snapshot = this.readSnapshot();
+		this.scanSafetyIfVisible(notice);
+		this.render();
+	}
+
+	/** Opens a finding's file at its line. Only files listed on screen, only inside the workspace. */
+	private async openFinding(file: unknown, line: unknown): Promise<void> {
+		const cwd = this.workspaceFolder();
+		if (typeof file !== 'string' || !cwd || !findFindingByFile(this.safety, file)) {
+			return;
+		}
+		const root = path.resolve(cwd);
+		const target = path.resolve(root, file);
+		if (!target.startsWith(root + path.sep)) {
+			return;
+		}
+		const lineIndex = Math.max(0, (typeof line === 'number' && Number.isFinite(line) ? line : 1) - 1);
+		try {
+			const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
+			const position = new vscode.Position(Math.min(lineIndex, Math.max(0, doc.lineCount - 1)), 0);
+			await vscode.window.showTextDocument(doc, { selection: new vscode.Range(position, position), preview: false });
+		} catch {
+			void vscode.window.showWarningMessage(`Git Clarity could not open ${file}. It may have been moved or deleted.`);
 		}
 	}
 
@@ -139,6 +228,7 @@ export class DashboardPanel {
 
 	private refresh(): void {
 		this.snapshot = this.readSnapshot();
+		this.scanSafetyIfVisible();
 		this.render();
 	}
 
@@ -167,7 +257,8 @@ export class DashboardPanel {
 			snapshot: this.snapshot,
 			activeTab: this.activeTab,
 			assistant: this.assistant,
-			acknowledgedCount: this.store.keys().length
+			acknowledgedCount: this.store.keys().length,
+			safety: this.safety
 		};
 		const serialized = JSON.stringify(state);
 		if (serialized === this.lastRendered) {

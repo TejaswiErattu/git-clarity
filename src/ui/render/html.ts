@@ -170,6 +170,42 @@ pre {
 .blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
 .result-fail { color: var(--vscode-errorForeground); }
 .actions { margin-top: 12px; }
+.severity {
+	display: inline-block;
+	font-weight: 600;
+	font-size: 0.85em;
+	padding: 1px 10px;
+	border-radius: 10px;
+	border: 1px solid currentColor;
+	white-space: nowrap;
+}
+.severity-high { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.severity-medium { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.severity-low { color: var(--vscode-descriptionForeground); }
+.finding {
+	border: 1px solid var(--vscode-panel-border, transparent);
+	border-left-width: 3px;
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 10px 0;
+}
+.finding-high { border-left-color: var(--vscode-errorForeground, currentColor); }
+.finding-medium { border-left-color: var(--vscode-editorWarning-foreground, currentColor); }
+.finding.acknowledged { opacity: 0.85; }
+.finding summary { cursor: pointer; }
+.finding-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.finding-head h3 { margin: 0; }
+button.link {
+	font: inherit;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--vscode-textLink-foreground);
+	text-decoration: underline;
+	cursor: pointer;
+	word-break: break-all;
+}
+button.link:hover { color: var(--vscode-textLink-activeForeground); }
 `;
 }
 
@@ -181,6 +217,9 @@ pre {
  *   assistantAsk     { text }                     Ask, Enter in the box, or an auto-submit chip
  *   assistantConfirm { previewId }                Confirm on the preview with that id
  *   assistantCancel  {}                           Cancel, or "Ask something else"
+ *   safetyAcknowledge / safetyUnacknowledge { key }   Acknowledge or Undo on a Secret Guard finding
+ *   safetyAddToGitignore { file }                     Add to .gitignore on a finding that allows it
+ *   openFile         { file, line }               a finding's file:line link
  * A chip that needs more typing only fills the box and focuses it.
  */
 export function clientScript(): string {
@@ -217,6 +256,12 @@ export function clientScript(): string {
 			vscode.postMessage({ type: 'assistantConfirm', previewId: Number(target.getAttribute('data-preview-id')) });
 		}
 		if (action === 'assistant-cancel') { vscode.postMessage({ type: 'assistantCancel' }); }
+		if (action === 'safety-ack') { vscode.postMessage({ type: 'safetyAcknowledge', key: target.getAttribute('data-key') }); }
+		if (action === 'safety-unack') { vscode.postMessage({ type: 'safetyUnacknowledge', key: target.getAttribute('data-key') }); }
+		if (action === 'safety-gitignore') { vscode.postMessage({ type: 'safetyAddToGitignore', file: target.getAttribute('data-file') }); }
+		if (action === 'open-file') {
+			vscode.postMessage({ type: 'openFile', file: target.getAttribute('data-file'), line: Number(target.getAttribute('data-line')) });
+		}
 	});
 	document.addEventListener('keydown', function (event) {
 		var el = event.target;
