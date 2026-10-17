@@ -43,7 +43,8 @@ npm run loc     # total lines of src/**/*.ts, for the 70/30 check in PROVENANCE.
 src/
   assistant/intentMatcher.ts   phrase -> intent (deterministic)
   git/gitActions.ts            plans, deny-list, argv-only execution
-  git/types.ts                 shared Git data types
+  git/gitCommands.ts           read-only data layer: getRepoSnapshot and friends, argv-only
+  git/types.ts                 shared Git data types (RepoSnapshot, BranchSummary, ...)
   safety/secretScanner.ts      patterns, placeholder filter, masking
   safety/secretGuard.ts        the backend <-> UI contract: staged scan, acknowledgements, commit guard
   extension.ts                 entry point
