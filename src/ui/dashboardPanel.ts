@@ -12,10 +12,10 @@ import * as vscode from 'vscode';
 import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
-import { AcknowledgedStore, addToGitignore } from '../safety/secretGuard';
-import { ask, AssistantDeps, AssistantState, cancel, confirm, initialAssistantState } from './assistantController';
+import { AcknowledgedStore, addToGitignore, checkCommitGuard } from '../safety/secretGuard';
+import { ask, AssistantDeps, AssistantState, backToPlan, cancel, confirm, initialAssistantState, refreshPreview } from './assistantController';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
-import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyView } from './safetyModel';
+import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyFindingView, SafetyView } from './safetyModel';
 
 export const POLL_INTERVAL_MS = 4000;
 
@@ -26,6 +26,7 @@ type WebviewMessage =
 	| { type: 'assistantAsk'; text: unknown }
 	| { type: 'assistantConfirm'; previewId: unknown }
 	| { type: 'assistantCancel' }
+	| { type: 'assistantBackToPlan' }
 	| { type: 'safetyAcknowledge'; key: unknown }
 	| { type: 'safetyUnacknowledge'; key: unknown }
 	| { type: 'safetyAddToGitignore'; file: unknown }
@@ -96,6 +97,9 @@ export class DashboardPanel {
 			case 'assistantCancel':
 				this.updateAssistant(cancel(this.assistant));
 				return;
+			case 'assistantBackToPlan':
+				this.updateAssistant(backToPlan(this.assistant, this.assistantDeps()));
+				return;
 			case 'safetyAcknowledge':
 				void this.setAcknowledged(message.key, true);
 				return;
@@ -122,12 +126,22 @@ export class DashboardPanel {
 		this.safety = { ...runSafetyScan(cwd, this.store), notice: notice ?? this.safety?.notice };
 	}
 
-	/** Acknowledge only a finding on screen; undo only a key that is actually acknowledged. */
+	/** Findings the Assistant is showing in a blocked commit preview. */
+	private assistantFindings(): SafetyFindingView[] {
+		return this.assistant.phase === 'preview' ? this.assistant.guard?.findings ?? [] : [];
+	}
+
+	/**
+	 * Acknowledge only a finding on screen (Safety tab or the Assistant's blocked preview);
+	 * undo only a key that is actually acknowledged. Then rebuild an open Assistant preview,
+	 * so acknowledging unblocks it and undoing blocks it again.
+	 */
 	private async setAcknowledged(key: unknown, acknowledged: boolean): Promise<void> {
 		if (typeof key !== 'string') {
 			return;
 		}
-		if (acknowledged && findFindingByKey(this.safety, key)) {
+		const onScreen = findFindingByKey(this.safety, key) || this.assistantFindings().some(f => f.key === key);
+		if (acknowledged && onScreen) {
 			await this.store.acknowledge(key);
 		} else if (!acknowledged && this.store.isAcknowledged(key)) {
 			await this.store.unacknowledge(key);
@@ -135,6 +149,7 @@ export class DashboardPanel {
 			return;
 		}
 		this.scanSafetyIfVisible();
+		this.assistant = refreshPreview(this.assistant, this.assistantDeps());
 		this.render();
 	}
 
@@ -162,7 +177,8 @@ export class DashboardPanel {
 	/** Opens a finding's file at its line. Only files listed on screen, only inside the workspace. */
 	private async openFinding(file: unknown, line: unknown): Promise<void> {
 		const cwd = this.workspaceFolder();
-		if (typeof file !== 'string' || !cwd || !findFindingByFile(this.safety, file)) {
+		const onScreen = typeof file === 'string' && (findFindingByFile(this.safety, file) || this.assistantFindings().some(f => f.file === file));
+		if (typeof file !== 'string' || !cwd || !onScreen) {
 			return;
 		}
 		const root = path.resolve(cwd);
@@ -187,7 +203,8 @@ export class DashboardPanel {
 			cwd: this.workspaceFolder(),
 			readSnapshot: () => this.readSnapshot(),
 			buildPlan: (match, cwd, snapshot) => buildActionPlan(match, cwd, snapshot, { acknowledged }),
-			execute: (match, cwd) => executeAction(match, cwd, { acknowledged })
+			execute: (match, cwd) => executeAction(match, cwd, { acknowledged }),
+			checkGuard: cwd => checkCommitGuard(cwd, acknowledged)
 		};
 	}
 

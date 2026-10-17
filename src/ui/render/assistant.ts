@@ -6,10 +6,13 @@
 
 import { SUPPORTED_INTENTS } from '../../assistant/intentMatcher';
 import { ActionPlan, GitActionResult, riskLabel } from '../../git/gitActions';
-import { AssistantState, canConfirm } from '../assistantController';
+import { AssistantGuard, AssistantState, canConfirm } from '../assistantController';
 import { card, escapeHtml } from './html';
+import { renderFinding } from './safety';
 
 export const NOTHING_RUNS_LINE = 'Nothing runs until you press Confirm.';
+export const BLOCKED_HEADING = 'Blocked: Secret Guard stopped this commit';
+export const ACKNOWLEDGE_WARNING = 'Only acknowledge a finding if you are sure it is not a real secret. Acknowledging lets this commit include that line.';
 
 /** One plain-English sentence explaining the risk badge. Derived from risk and reversibility. */
 export function riskReason(plan: Pick<ActionPlan, 'risk' | 'reversible'>): string {
@@ -64,15 +67,36 @@ function renderRisk(plan: ActionPlan): string {
 	return `<p><span class="risk risk-${plan.risk}">${riskLabel(plan.risk)}</span> ${escapeHtml(riskReason(plan))}</p>`;
 }
 
+/** Shown above the plan when Secret Guard blocks a commit: every blocking finding, with actions. */
+function renderBlocked(plan: ActionPlan, guard: AssistantGuard): string {
+	const locations = guard.findings.map(f => `${f.file} line ${f.line}`);
+	const others = guard.otherCount > 0
+		? `<p class="muted">${guard.otherCount} other ${guard.otherCount === 1 ? 'finding does' : 'findings do'} not block this commit. See the Safety tab.</p>`
+		: '';
+	return (
+		'<div class="blocked-section">' +
+		`<h3>${escapeHtml(BLOCKED_HEADING)}</h3>` +
+		(plan.blockedReason ? `<p>${escapeHtml(plan.blockedReason)} You can also acknowledge it here.</p>` : '') +
+		list(locations, 'blocked-locations') +
+		`<p class="notice">${escapeHtml(ACKNOWLEDGE_WARNING)}</p>` +
+		guard.findings.map(f => renderFinding(f, { gitignore: false, openButton: true })).join('') +
+		others +
+		'</div>'
+	);
+}
+
 function renderPreview(state: AssistantState, plan: ActionPlan): string {
 	const parts: string[] = [];
+	const guardBlocked = state.guard?.blocked === true;
 	if (state.notice) {
 		parts.push(`<p class="notice">${escapeHtml(state.notice)}</p>`);
 	}
 	if (state.match?.confidence === 'medium') {
 		parts.push('<p class="muted">Best guess from keywords. Check this is what you meant.</p>');
 	}
-	if (plan.blockedReason) {
+	if (guardBlocked && state.guard) {
+		parts.push(renderBlocked(plan, state.guard));
+	} else if (plan.blockedReason) {
 		parts.push(`<p class="blocked"><strong>Can't do this yet.</strong> ${escapeHtml(plan.blockedReason)}</p>`);
 	}
 	parts.push(renderRisk(plan));
@@ -85,7 +109,7 @@ function renderPreview(state: AssistantState, plan: ActionPlan): string {
 		parts.push(section('Warnings', list(plan.warnings, 'warnings')));
 	}
 	parts.push(section('How to undo', `<p>${escapeHtml(plan.undoHint)}</p>`));
-	const disabled = canConfirm(plan) ? '' : ' disabled';
+	const disabled = canConfirm(plan, state.guard) ? '' : ' disabled';
 	parts.push(
 		'<div class="row actions">' +
 			`<button class="primary" data-action="assistant-confirm" data-preview-id="${state.previewId}"${disabled}>Confirm</button>` +
@@ -105,13 +129,21 @@ function renderUnrecognized(input: string): string {
 	);
 }
 
-function renderResult(result: GitActionResult): string {
+function resultTitle(result: GitActionResult, notSaved: boolean): string {
+	if (result.success) {
+		return 'Done';
+	}
+	return notSaved ? 'Not saved' : 'Did not finish';
+}
+
+function renderResult(result: GitActionResult, canReturnToPlan: boolean): string {
 	const details = result.details ? `<pre class="result-details">${escapeHtml(result.details)}</pre>` : '';
 	const cls = result.success ? 'result-ok' : 'result-fail';
+	const back = canReturnToPlan ? '<button class="primary" data-action="assistant-back">Back to plan</button>' : '';
 	return card(
-		result.success ? 'Done' : 'Did not finish',
+		resultTitle(result, canReturnToPlan),
 		`<p class="${cls}">${escapeHtml(result.summary)}</p>${details}` +
-			'<div class="row actions"><button class="secondary" data-action="assistant-cancel">Ask something else</button></div>'
+			`<div class="row actions">${back}<button class="secondary" data-action="assistant-cancel">Ask something else</button></div>`
 	);
 }
 
@@ -122,7 +154,7 @@ function renderPhase(state: AssistantState): string {
 		case 'unrecognized':
 			return renderUnrecognized(state.input);
 		case 'done':
-			return state.result ? renderResult(state.result) : '';
+			return state.result ? renderResult(state.result, state.canReturnToPlan === true) : '';
 		case 'idle':
 			return '';
 	}
