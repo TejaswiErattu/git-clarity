@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { matchIntent } from '../assistant/intentMatcher';
 import { buildActionPlan } from '../git/gitActions';
+import { getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
 import {
 	ACKNOWLEDGED_STATE_KEY,
@@ -44,23 +45,8 @@ function finding(overrides: Partial<SecretFinding> = {}): SecretFinding {
 	};
 }
 
-/** Minimal snapshot for planning; only the fields planCommit reads. */
 function snapshotFor(repo: string): RepoSnapshot {
-	const status = git(repo, 'status', '--porcelain');
-	const changedFiles = status
-		.split('\n')
-		.filter(line => line.length > 3)
-		.map(line => ({ status: line.slice(0, 2), path: line.slice(3) }));
-	return {
-		isRepo: true,
-		repoName: path.basename(repo),
-		currentBranch: 'main',
-		branches: [{ name: 'main', isCurrent: true }],
-		commits: [],
-		changedFileCount: changedFiles.length,
-		changedFiles,
-		aheadBehind: { ahead: 0, behind: 0, hasUpstream: false }
-	};
+	return getRepoSnapshot(repo);
 }
 
 suite('secretGuard: acknowledgements', () => {
