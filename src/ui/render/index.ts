@@ -5,6 +5,7 @@
 
 import { RepoSnapshot } from '../../git/types';
 import { AssistantState } from '../assistantController';
+import { SafetyView } from '../safetyModel';
 import { renderActivity } from './activity';
 import { renderAssistant } from './assistant';
 import { renderBranches } from './branches';
@@ -34,6 +35,8 @@ export interface DashboardState {
 	assistant: AssistantState;
 	/** Acknowledged Secret Guard findings in this workspace. */
 	acknowledgedCount: number;
+	/** Safety tab scan results. Undefined until the tab has been scanned. */
+	safety?: SafetyView;
 }
 
 function renderTabBar(activeTab: TabId): string {
@@ -62,7 +65,7 @@ function renderTab(state: DashboardState, snapshot: RepoSnapshot): string {
 		case 'assistant':
 			return renderAssistant(state.assistant);
 		case 'safety':
-			return renderSafety(state.acknowledgedCount);
+			return renderSafety(state.safety, state.acknowledgedCount);
 	}
 }
 
