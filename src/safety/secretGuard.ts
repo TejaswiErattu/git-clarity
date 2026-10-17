@@ -177,7 +177,13 @@ function findingsFromDiff(diff: string): { fileCount: number; paths: string[]; f
  *   - `scannedFileCount` is the number of files that appeared in the diff.
  */
 export function scanStagedDiff(cwd: string): SecretScanResult {
-	const diff = runGit(cwd, ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color']);
+	let diff: string;
+	try {
+		diff = runGit(cwd, ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color']);
+	} catch {
+		// Not a Git repo: `git diff --cached` exits with "unknown option `cached`".
+		return scanResult(0, []);
+	}
 	const { fileCount, findings } = findingsFromDiff(diff);
 	return scanResult(fileCount, findings);
 }
