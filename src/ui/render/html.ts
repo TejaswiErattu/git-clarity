@@ -170,6 +170,39 @@ pre {
 .blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
 .result-fail { color: var(--vscode-errorForeground); }
 .actions { margin-top: 12px; }
+.help-button { min-width: 28px; font-weight: 600; }
+.help-backdrop {
+	position: fixed;
+	inset: 0;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding: 24px 16px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 75%, transparent);
+	z-index: 10;
+}
+.help-dialog {
+	width: 100%;
+	max-width: 640px;
+	max-height: calc(100vh - 48px);
+	overflow: auto;
+	padding: 16px 20px;
+	border-radius: 6px;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-contrastBorder, var(--vscode-panel-border, currentColor)));
+	outline: 1px solid var(--vscode-contrastBorder, transparent);
+	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
+}
+.help-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.help-head h2 { font-size: 1.2em; margin: 0; }
+.help-close { font-size: 1.2em; line-height: 1; padding: 2px 10px; }
+dl.help-tabs { margin: 0 0 8px; }
+dl.help-tabs dt { font-weight: 600; margin-top: 8px; }
+dl.help-tabs dd { margin: 2px 0 0 0; }
+ul.help-intents { list-style: none; margin: 0; padding: 0; }
+ul.help-intents li { padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border, transparent); }
+ul.help-intents li:last-child { border-bottom: none; }
 .sync {
 	border: 1px solid var(--vscode-panel-border, transparent);
 	border-left-width: 4px;
@@ -270,12 +303,52 @@ button.link:hover { color: var(--vscode-textLink-activeForeground); }
  *   safetyAcknowledge / safetyUnacknowledge { key }   Acknowledge or Undo on a Secret Guard finding
  *   safetyAddToGitignore { file }                     Add to .gitignore on a finding that allows it
  *   openFile         { file, line }               a finding's file:line link
+ *   showHelp / hideHelp {}                       the ? button, Got it, ×, or Escape
+ * When the help dialog is open, focus starts inside it and Tab stays inside it. Closing it
+ * returns focus to the ? button (remembered with the webview state across the re-render).
  * A chip that needs more typing only fills the box and focuses it.
  */
 export function clientScript(): string {
 	return `
 (function () {
 	var vscode = acquireVsCodeApi();
+	function helpDialog() { return document.querySelector('.help-dialog'); }
+	function focusables(root) {
+		return Array.prototype.slice.call(root.querySelectorAll('button:not([disabled]), [href], input, [tabindex]:not([tabindex="-1"])'));
+	}
+	function hideHelp() {
+		vscode.setState(Object.assign({}, vscode.getState() || {}, { returnFocus: 'help' }));
+		vscode.postMessage({ type: 'hideHelp' });
+	}
+	(function restoreFocus() {
+		var dialog = helpDialog();
+		var saved = vscode.getState() || {};
+		if (dialog) {
+			var first = focusables(dialog)[0];
+			if (first) { first.focus(); }
+		} else if (saved.returnFocus === 'help') {
+			var helpButton = document.querySelector('[data-action="show-help"]');
+			if (helpButton) { helpButton.focus(); }
+			vscode.setState(Object.assign({}, saved, { returnFocus: undefined }));
+		}
+	})();
+	document.addEventListener('keydown', function (event) {
+		var dialog = helpDialog();
+		if (!dialog) { return; }
+		if (event.key === 'Escape') { event.preventDefault(); hideHelp(); return; }
+		if (event.key !== 'Tab') { return; }
+		var items = focusables(dialog);
+		if (items.length === 0) { return; }
+		var first = items[0];
+		var last = items[items.length - 1];
+		if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+			event.preventDefault();
+			first.focus();
+		}
+	});
 	function assistantBox() { return document.querySelector('input[data-input="assistant"]'); }
 	function ask(text) {
 		var box = assistantBox();
@@ -301,6 +374,8 @@ export function clientScript(): string {
 		}
 		var action = target.getAttribute('data-action');
 		if (action === 'refresh') { vscode.postMessage({ type: 'refresh' }); }
+		if (action === 'show-help') { vscode.postMessage({ type: 'showHelp' }); }
+		if (action === 'hide-help') { hideHelp(); }
 		if (action === 'assistant-ask') { var box = assistantBox(); ask(box ? box.value : ''); }
 		if (action === 'assistant-confirm') {
 			vscode.postMessage({ type: 'assistantConfirm', previewId: Number(target.getAttribute('data-preview-id')) });

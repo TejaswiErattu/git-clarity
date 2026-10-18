@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { createAcknowledgedStore } from './safety/secretGuard';
 import { DashboardPanel } from './ui/dashboardPanel';
+import { resetHelpSeen } from './ui/firstRun';
 
 /**
  * Git Clarity entry point.
@@ -15,6 +16,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('gitClarity.openDashboard', () => {
 			DashboardPanel.createOrShow(context, acknowledged);
+		}),
+		vscode.commands.registerCommand('gitClarity.resetFirstRun', async () => {
+			await resetHelpSeen(context.workspaceState);
+			DashboardPanel.showHelpIfOpen();
+			void vscode.window.showInformationMessage('Git Clarity: first-run help will show again.');
 		})
 	);
 }
