@@ -12,6 +12,7 @@
  *
  * Scanning:
  *   scanStagedDiff, scanPendingCommit.
+ *   isTracked, untrackFile, ignoreAndUntrack.
  *
  * Design rules (from the Oct 1 plan):
  *   - Scan the diff, not whole files: only lines that are about to leave the machine count.
@@ -409,4 +410,101 @@ export function addToGitignore(cwd: string, relativePath: string): GitignoreResu
 	const updated = `${existing}${separator}${target}\n`;
 	fs.writeFileSync(file, updated, 'utf8');
 	return { added: true, gitignore: updated };
+}
+
+export interface UntrackResult {
+	/** True only when the path was tracked and `git rm --cached` removed it from the index. */
+	untracked: boolean;
+	message: string;
+}
+
+export interface IgnoreAndUntrackResult {
+	/** True when this call appended the path to .gitignore. */
+	added: boolean;
+	/** True when the path was tracked and is now out of the index. */
+	untracked: boolean;
+	message: string;
+}
+
+function repoRelative(relativePath: string): string {
+	return relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** A path Git must not be asked to remove: absolute, escaping the repo, or a directory. */
+function rejectUntrackPath(cwd: string, relativePath: string): string | undefined {
+	const normalized = repoRelative(relativePath);
+	if (normalized.length === 0 || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+		return 'That path has to stay inside this project.';
+	}
+	if (normalized.split('/').some(part => part === '..')) {
+		return 'That path has to stay inside this project.';
+	}
+	if (normalized.endsWith('/')) {
+		return 'That path is a folder. Stop tracking a file, not a folder.';
+	}
+	const root = path.resolve(cwd);
+	const absolute = path.resolve(root, normalized);
+	if (absolute !== root && !absolute.startsWith(root + path.sep)) {
+		return 'That path has to stay inside this project.';
+	}
+	if (fs.existsSync(absolute) && fs.statSync(absolute).isDirectory()) {
+		return 'That path is a folder. Stop tracking a file, not a folder.';
+	}
+	return undefined;
+}
+
+/** True when the path is in the index. A missing path is not tracked. */
+export function isTracked(cwd: string, relativePath: string): boolean {
+	try {
+		execFileSync('git', ['ls-files', '--error-unmatch', '--', repoRelative(relativePath)], {
+			cwd,
+			stdio: ['ignore', 'pipe', 'pipe']
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * `git rm --cached`: the file stays on disk and leaves the index.
+ * Refuses absolute paths, `..`, and directories.
+ */
+export function untrackFile(cwd: string, relativePath: string): UntrackResult {
+	const rejected = rejectUntrackPath(cwd, relativePath);
+	if (rejected) {
+		return { untracked: false, message: rejected };
+	}
+	const target = repoRelative(relativePath);
+	if (!isTracked(cwd, target)) {
+		return { untracked: false, message: `${target} is not tracked, so there is nothing to stop tracking.` };
+	}
+	const absolute = path.resolve(cwd, target);
+	execFileSync('git', ['rm', '--cached', '--quiet', '--', target], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+	const onDisk = fs.existsSync(absolute);
+	return {
+		untracked: true,
+		message: onDisk
+			? `${target} stays on your computer and will not be in the next commit.`
+			: `${target} was removed from Git.`
+	};
+}
+
+/** Add the path to .gitignore, and stop tracking it when Git already has it. */
+export function ignoreAndUntrack(cwd: string, relativePath: string): IgnoreAndUntrackResult {
+	const rejected = rejectUntrackPath(cwd, relativePath);
+	if (rejected) {
+		return { added: false, untracked: false, message: rejected };
+	}
+	const target = repoRelative(relativePath);
+	const ignore = addToGitignore(cwd, target);
+	if (!isTracked(cwd, target)) {
+		const message = ignore.added
+			? `Added ${target} to .gitignore.`
+			: `${target} is already in .gitignore.`;
+		return { added: ignore.added, untracked: false, message };
+	}
+	const untrack = untrackFile(cwd, target);
+	const ignoreNote = ignore.added ? `Added ${target} to .gitignore. ` : `${target} is already in .gitignore. `;
+	return { added: ignore.added, untracked: untrack.untracked, message: `${ignoreNote}${untrack.message}` };
 }

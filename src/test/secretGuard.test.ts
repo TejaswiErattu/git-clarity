@@ -17,6 +17,9 @@ import {
 	addToGitignore,
 	buildIgnoreKey,
 	checkCommitGuard,
+	ignoreAndUntrack,
+	isTracked,
+	untrackFile,
 	createAcknowledgedStore,
 	createInMemoryAcknowledgedStore,
 	fixGuidanceFor,
@@ -261,5 +264,63 @@ suite('secretGuard: staged and pending scanning (P1 spec)', () => {
 		assert.strictEqual(guard.findings.length, 1);
 		assert.strictEqual(guard.findings[0].severity, 'medium');
 		assert.strictEqual(guard.blocked, false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// P3: stop tracking a file that is already in Git, then ignore it.
+// ---------------------------------------------------------------------------
+suite('secretGuard: stop tracking', () => {
+	suiteSetup(isolateGitEnv);
+	suiteTeardown(() => {
+		restoreGitEnv();
+		cleanupTempDirs();
+	});
+
+	test('a tracked .env is removed from the index, stays on disk, and is then ignored', () => {
+		const repo = makeTempRepo();
+		commitFile(repo, '.env', 'TOKEN=1\n', 'track env');
+		commitFile(repo, 'src/app.js', 'console.log(1);\n', 'app');
+		const before = git(repo, 'ls-files');
+		assert.strictEqual(isTracked(repo, '.env'), true);
+
+		const result = ignoreAndUntrack(repo, '.env');
+		assert.strictEqual(result.added, true);
+		assert.strictEqual(result.untracked, true);
+		assert.strictEqual(fs.readFileSync(path.join(repo, '.env'), 'utf8'), 'TOKEN=1\n');
+		assert.strictEqual(isTracked(repo, '.env'), false);
+		assert.strictEqual(git(repo, 'check-ignore', '.env'), '.env');
+		assert.ok(git(repo, 'status', '--short', '--ignored').includes('!! .env'));
+
+		const after = git(repo, 'ls-files');
+		assert.ok(!after.split('\n').includes('.env'));
+		assert.ok(after.split('\n').includes('src/app.js'));
+		assert.ok(before.split('\n').includes('README.md') && after.split('\n').includes('README.md'));
+	});
+
+	test('an untracked .env is only added to .gitignore', () => {
+		const repo = makeTempRepo();
+		writeFile(repo, '.env', 'TOKEN=1\n');
+		assert.strictEqual(isTracked(repo, '.env'), false);
+
+		const result = ignoreAndUntrack(repo, '.env');
+		assert.strictEqual(result.added, true);
+		assert.strictEqual(result.untracked, false);
+		assert.strictEqual(fs.readFileSync(path.join(repo, '.env'), 'utf8'), 'TOKEN=1\n');
+		assert.strictEqual(git(repo, 'check-ignore', '.env'), '.env');
+		assert.ok(!git(repo, 'ls-files').split('\n').includes('.env'));
+	});
+
+	test("'../x' and a directory are refused, and an absolute path is refused", () => {
+		const repo = makeTempRepo();
+		writeFile(repo, 'src/app.js', 'console.log(1);\n');
+		const outside = untrackFile(repo, '../x');
+		const folder = untrackFile(repo, 'src/');
+		const absolute = untrackFile(repo, path.resolve(repo, '.env'));
+		assert.strictEqual(outside.untracked, false);
+		assert.strictEqual(folder.untracked, false);
+		assert.strictEqual(absolute.untracked, false);
+		assert.ok(outside.message.length > 0 && folder.message.length > 0 && absolute.message.length > 0);
+		assert.ok(fs.existsSync(path.join(repo, 'src', 'app.js')));
 	});
 });
