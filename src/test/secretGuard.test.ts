@@ -7,6 +7,7 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { matchIntent } from '../assistant/intentMatcher';
 import { buildActionPlan } from '../git/gitActions';
@@ -261,5 +262,113 @@ suite('secretGuard: staged and pending scanning (P1 spec)', () => {
 		assert.strictEqual(guard.findings.length, 1);
 		assert.strictEqual(guard.findings[0].severity, 'medium');
 		assert.strictEqual(guard.blocked, false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// P2 edge cases.
+// ---------------------------------------------------------------------------
+const OTHER_AWS_KEY = 'AKIA' + 'MNBVCXZLKJHGFDSA';
+
+suite('secretGuard: edge cases', () => {
+	suiteSetup(isolateGitEnv);
+	suiteTeardown(() => {
+		restoreGitEnv();
+		cleanupTempDirs();
+	});
+
+	test('a repo with no commits reports tracked and untracked keys and blocks', () => {
+		const repo = makeTempRepo();
+		git(repo, 'update-ref', '-d', 'HEAD');
+		git(repo, 'rm', '-r', '-f', '--cached', '.');
+		writeFile(repo, 'config.js', `const key = "${FAKE_AWS_KEY}";\n`);
+		git(repo, 'add', 'config.js');
+		writeFile(repo, 'notes.txt', `token ${FAKE_AWS_KEY}\n`);
+
+		const pending = scanPendingCommit(repo);
+		const files = pending.findings.map(item => item.file).sort();
+		assert.deepStrictEqual(files, ['config.js', 'notes.txt']);
+		assert.ok(pending.findings.every(item => item.severity === 'high'));
+
+		const guard = checkCommitGuard(repo, createInMemoryAcknowledgedStore());
+		assert.strictEqual(guard.blocked, true);
+	});
+
+	test('a png with key-like bytes is skipped by both scans', () => {
+		const repo = makeTempRepo();
+		const bytes = Buffer.concat([Buffer.from([0]), Buffer.from(FAKE_AWS_KEY)]);
+		fs.writeFileSync(path.join(repo, 'secret.png'), bytes);
+		git(repo, 'add', 'secret.png');
+
+		assert.strictEqual(scanStagedDiff(repo).findings.length, 0);
+		assert.strictEqual(scanPendingCommit(repo).findings.length, 0);
+	});
+
+	test('a key committed earlier and left untouched is reported by neither scan', () => {
+		const repo = makeTempRepo();
+		commitFile(repo, 'config.js', `const key = "${FAKE_AWS_KEY}";\nconst region = "us-west-2";\n`, 'add key');
+		writeFile(repo, 'config.js', `const key = "${FAKE_AWS_KEY}";\nconst region = "eu-west-1";\n`);
+		git(repo, 'add', 'config.js');
+
+		assert.strictEqual(scanStagedDiff(repo).findings.length, 0);
+		assert.strictEqual(scanPendingCommit(repo).findings.length, 0);
+	});
+
+	test('two keys in one file stay blocked after acknowledging only one', async () => {
+		const repo = makeTempRepo();
+		writeFile(repo, 'config.js', `const a = "${FAKE_AWS_KEY}";\nconst b = "${OTHER_AWS_KEY}";\n`);
+		const pending = scanPendingCommit(repo);
+		assert.strictEqual(pending.findings.length, 2);
+		const keys = pending.findings.map(item => buildIgnoreKey(item));
+		assert.notStrictEqual(keys[0], keys[1]);
+
+		const store = createInMemoryAcknowledgedStore();
+		await store.acknowledge(keys[0]);
+		const guard = checkCommitGuard(repo, store);
+		assert.strictEqual(guard.blocked, true);
+		assert.strictEqual(guard.unacknowledged.length, 1);
+		assert.strictEqual(buildIgnoreKey(guard.unacknowledged[0]), keys[1]);
+	});
+
+	test('a medium-severity password is shown and never blocks', () => {
+		const repo = makeTempRepo();
+		writeFile(repo, 'app.js', 'const password = "hunter2hunter2";\n');
+		const guard = checkCommitGuard(repo, createInMemoryAcknowledgedStore());
+		assert.strictEqual(guard.findings.length, 1);
+		assert.strictEqual(guard.findings[0].severity, 'medium');
+		assert.strictEqual(guard.unacknowledged.length, 0);
+		assert.strictEqual(guard.blocked, false);
+	});
+
+	test('an untracked file larger than 1 MiB is skipped quickly', () => {
+		const repo = makeTempRepo();
+		const body = `${FAKE_AWS_KEY}\n${'a'.repeat(1024 * 1024 + 1)}`;
+		fs.writeFileSync(path.join(repo, 'huge.txt'), body);
+
+		const started = Date.now();
+		const pending = scanPendingCommit(repo);
+		const elapsed = Date.now() - started;
+
+		assert.strictEqual(pending.findings.length, 0);
+		assert.ok(elapsed < 500, `scan took ${elapsed} ms`);
+	});
+
+	test('a file in node_modules is skipped even when untracked', () => {
+		const repo = makeTempRepo();
+		writeFile(repo, 'node_modules/pkg/index.js', `const key = "${FAKE_AWS_KEY}";\n`);
+
+		assert.strictEqual(scanStagedDiff(repo).findings.length, 0);
+		assert.strictEqual(scanPendingCommit(repo).findings.length, 0);
+	});
+
+	test('scanStagedDiff on a non-repo folder returns an empty result', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-clarity-not-a-repo-'));
+		try {
+			const result = scanStagedDiff(dir);
+			assert.strictEqual(result.scannedFileCount, 0);
+			assert.deepStrictEqual(result.findings, []);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
