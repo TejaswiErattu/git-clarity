@@ -22,6 +22,28 @@ was carried over from earlier work (four files, about 1,100 lines) and what was 
 - **Safety layer.** Git runs with argument arrays, never a shell string. A deny-list refuses `--force`,
   `--hard`, `reset`, `clean`, `rebase` and friends. `pull` is `--ff-only`. `switch`, not `checkout`.
 
+## Screenshots
+
+Screenshots are taken with the capture guide in [`docs/screenshots.md`](docs/screenshots.md). They have not been
+captured yet; each image will appear here once its PNG is committed to `docs/screenshots/`.
+
+| Screenshot (planned) | What it shows | Status |
+| --- | --- | --- |
+| `docs/screenshots/06-assistant-blocked.png` | Secret Guard stops a commit that contains a likely API key and explains exactly what to do about it. | Not captured yet |
+| `docs/screenshots/05-assistant-plan.png` | Before anything runs, the Assistant shows the exact commands, the risk, the files involved and how to undo it. | Not captured yet |
+| `docs/screenshots/08-safety-findings.png` | The Safety tab separates what is about to be committed from other changed files and explains each possible secret. | Not captured yet |
+| `docs/screenshots/01-overview.png` | The Overview shows what changed and whether it is ready to commit, in words a beginner understands. | Not captured yet |
+| `docs/screenshots/02-branches.png` | Branches compares every branch with main and warns when two branches change the same file. | Not captured yet |
+| `docs/screenshots/03-activity.png` | Activity groups recent commits by day so you can see who saved what, and when. | Not captured yet |
+| `docs/screenshots/04-assistant-empty.png` | Ask for what you want in plain English, or start from one of nine examples. | Not captured yet |
+| `docs/screenshots/07-assistant-unrecognized.png` | When a request is not understood, the Assistant says so and lists what it can do instead of guessing. | Not captured yet |
+| `docs/screenshots/09-safety-acknowledged.png` | Acknowledging a false alarm collapses it without hiding it, and it can be undone at any time. | Not captured yet |
+| `docs/screenshots/10-first-run-help.png` | A first-run guide explains each tab in plain words and lists every request the Assistant understands. | Not captured yet |
+
+<!-- When a PNG is committed, replace its row with an image and caption, e.g.
+![Secret Guard stops a commit that contains a likely API key](docs/screenshots/06-assistant-blocked.png)
+-->
+
 ## Run it
 
 ```bash
@@ -49,6 +71,9 @@ src/
   safety/secretGuard.ts        the backend <-> UI contract: staged scan, acknowledgements, commit guard
   extension.ts                 entry point
   test/                        mocha suites; helpers/tempRepo.ts builds throwaway repos
+docs/
+  screenshots.md               how to capture the README and Devpost screenshots
+  screenshots/                 the captured PNGs (empty until they are taken)
 ```
 
 ## Team
