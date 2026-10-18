@@ -9,6 +9,7 @@ import { SafetyView } from '../safetyModel';
 import { renderActivity } from './activity';
 import { renderAssistant } from './assistant';
 import { renderBranches } from './branches';
+import { renderHelpOverlay } from './help';
 import { baseStyles, clientScript, cspMeta, emptyState, escapeHtml } from './html';
 import { renderOverview } from './overview';
 import { renderSafety } from './safety';
@@ -37,6 +38,8 @@ export interface DashboardState {
 	acknowledgedCount: number;
 	/** Safety tab scan results. Undefined until the tab has been scanned. */
 	safety?: SafetyView;
+	/** First-run help overlay is showing. Missing means closed. */
+	helpOpen?: boolean;
 }
 
 function renderTabBar(activeTab: TabId): string {
@@ -51,7 +54,7 @@ function renderHeader(snapshot: RepoSnapshot | undefined): string {
 	const subtitle = snapshot?.isRepo && snapshot.currentBranch
 		? `<span class="muted">${escapeHtml(snapshot.repoName)} · ${escapeHtml(snapshot.currentBranch)}</span>`
 		: '';
-	return `<header><h1>Git Clarity</h1><div class="row">${subtitle}<button class="secondary" data-action="refresh">Refresh</button></div></header>`;
+	return `<header><h1>Git Clarity</h1><div class="row">${subtitle}<button class="secondary" data-action="refresh">Refresh</button><button class="secondary help-button" data-action="show-help" aria-label="Open help" title="Help">?</button></div></header>`;
 }
 
 function renderTab(state: DashboardState, snapshot: RepoSnapshot): string {
@@ -98,6 +101,7 @@ export function renderDashboardHtml(state: DashboardState, nonce: string, cspSou
 		'<body>',
 		renderHeader(state.snapshot),
 		renderBody(state),
+		renderHelpOverlay(state.helpOpen === true),
 		`<script nonce="${nonce}">${clientScript()}</script>`,
 		'</body>',
 		'</html>'

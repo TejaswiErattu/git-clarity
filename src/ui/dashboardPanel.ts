@@ -12,8 +12,9 @@ import * as vscode from 'vscode';
 import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
-import { AcknowledgedStore, addToGitignore, checkCommitGuard } from '../safety/secretGuard';
+import { AcknowledgedStore, addToGitignore, checkCommitGuard, MementoLike } from '../safety/secretGuard';
 import { ask, AssistantDeps, AssistantState, backToPlan, cancel, confirm, initialAssistantState, refreshPreview } from './assistantController';
+import { hasSeenHelp, markHelpSeen } from './firstRun';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
 import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyFindingView, SafetyView } from './safetyModel';
 
@@ -27,6 +28,8 @@ type WebviewMessage =
 	| { type: 'assistantConfirm'; previewId: unknown }
 	| { type: 'assistantCancel' }
 	| { type: 'assistantBackToPlan' }
+	| { type: 'showHelp' }
+	| { type: 'hideHelp' }
 	| { type: 'safetyAcknowledge'; key: unknown }
 	| { type: 'safetyUnacknowledge'; key: unknown }
 	| { type: 'safetyAddToGitignore'; file: unknown }
@@ -44,6 +47,8 @@ export class DashboardPanel {
 	private safety: SafetyView | undefined;
 	private lastRendered = '';
 	private renderPending = false;
+	/** First-run help overlay. Opens automatically until this workspace dismisses it once. */
+	private helpOpen: boolean;
 
 	static createOrShow(context: vscode.ExtensionContext, store: AcknowledgedStore): DashboardPanel {
 		if (DashboardPanel.current) {
@@ -54,19 +59,38 @@ export class DashboardPanel {
 			enableScripts: true,
 			retainContextWhenHidden: true
 		});
-		DashboardPanel.current = new DashboardPanel(panel, store);
+		DashboardPanel.current = new DashboardPanel(panel, store, context.workspaceState);
 		context.subscriptions.push(DashboardPanel.current);
 		return DashboardPanel.current;
 	}
 
 	private constructor(
 		private readonly panel: vscode.WebviewPanel,
-		private readonly store: AcknowledgedStore
+		private readonly store: AcknowledgedStore,
+		private readonly workspaceState: MementoLike
 	) {
+		this.helpOpen = !hasSeenHelp(workspaceState);
 		this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
 		this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => this.handleMessage(message), undefined, this.disposables);
 		this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
-		this.refresh();
+		this.refresh(true);
+	}
+
+	/** Used by gitClarity.resetFirstRun: show the overlay now if the dashboard is open. */
+	static showHelpIfOpen(): void {
+		if (DashboardPanel.current) {
+			DashboardPanel.current.panel.reveal();
+			DashboardPanel.current.setHelpOpen(true);
+		}
+	}
+
+	/** Dismissing the overlay is what counts as "seen", so closing the panel first shows it again next time. */
+	private async setHelpOpen(open: boolean): Promise<void> {
+		this.helpOpen = open;
+		this.render(true);
+		if (!open) {
+			await markHelpSeen(this.workspaceState);
+		}
 	}
 
 	private handleMessage(message: WebviewMessage): void {
@@ -96,6 +120,12 @@ export class DashboardPanel {
 				return;
 			case 'assistantCancel':
 				this.updateAssistant(cancel(this.assistant));
+				return;
+			case 'showHelp':
+				void this.setHelpOpen(true);
+				return;
+			case 'hideHelp':
+				void this.setHelpOpen(false);
 				return;
 			case 'assistantBackToPlan':
 				this.updateAssistant(backToPlan(this.assistant, this.assistantDeps()));
@@ -243,10 +273,10 @@ export class DashboardPanel {
 		}
 	}
 
-	private refresh(): void {
+	private refresh(force = false): void {
 		this.snapshot = this.readSnapshot();
 		this.scanSafetyIfVisible();
-		this.render();
+		this.render(force);
 	}
 
 	private workspaceFolder(): string | undefined {
@@ -265,8 +295,12 @@ export class DashboardPanel {
 		}
 	}
 
-	private render(): void {
-		if (this.inputFocused) {
+	/**
+	 * Skipped while typing or while the help dialog is open, so a poll never steals focus.
+	 * `force` is for explicit actions that must show their result (help open/close, first paint).
+	 */
+	private render(force = false): void {
+		if (!force && (this.inputFocused || this.helpOpen)) {
 			this.renderPending = true;
 			return;
 		}
@@ -275,7 +309,8 @@ export class DashboardPanel {
 			activeTab: this.activeTab,
 			assistant: this.assistant,
 			acknowledgedCount: this.store.keys().length,
-			safety: this.safety
+			safety: this.safety,
+			helpOpen: this.helpOpen
 		};
 		const serialized = JSON.stringify(state);
 		if (serialized === this.lastRendered) {
