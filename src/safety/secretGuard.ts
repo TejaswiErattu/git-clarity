@@ -394,8 +394,8 @@ export interface GitignoreResult {
 
 /**
  * Append a repo-relative path to .gitignore, once, with a trailing newline. Creates the file if
- * needed. Does not touch the index: if the file is already tracked, the UI should say so and
- * offer "git rm --cached" as a follow-up (that is a P3 extension, not in scope here).
+ * needed. Does not touch the index. The Safety tab uses ignoreAndUntrack, which also stops
+ * tracking a file that Git already has.
  */
 export function addToGitignore(cwd: string, relativePath: string): GitignoreResult {
 	const target = relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
