@@ -47,11 +47,21 @@ This builds `/tmp/gc-demo/campus-events` with a shared copy (`remote.git`), some
 two feature branches that both touch `src/app.js`, one commit not uploaded yet, and a mix of staged, not staged
 and untracked files. No secrets yet; those are added for shots 06, 08 and 09.
 
+Every command in this guide works only inside `/tmp/gc-demo`. The setup runs in a subshell with `set -e`, so if
+any step fails (for example the folder cannot be created) it stops instead of running the rest in whatever
+folder your terminal is in. Never run these commands inside the Git Clarity repository itself.
+
 ```bash
+(
+set -e
 DEMO=/tmp/gc-demo
-rm -rf "$DEMO" && mkdir -p "$DEMO" && cd "$DEMO"
+rm -rf "$DEMO"
+mkdir -p "$DEMO"
+cd "$DEMO"
 git init -q --bare -b main remote.git
-git clone -q remote.git campus-events && cd campus-events
+git clone -q remote.git campus-events
+cd campus-events
+test "$(basename "$PWD")" = campus-events
 git config user.name "Sam Rivera"
 git config user.email "sam@example.com"
 git config commit.gpgsign false
@@ -83,6 +93,7 @@ git add -A && git commit -q -m "List the first event"
 echo 'Find and RSVP to campus events.' >> README.md
 echo 'export function rsvp() {}' > src/rsvp.js && git add src/rsvp.js
 echo 'ideas: map view' > notes.txt
+)
 ```
 
 Then press **F5** in this repo, and in the Extension Development Host open the folder
@@ -182,8 +193,7 @@ Clear the text box before the next shot (this screen has no Cancel button; the n
 - **Tab:** Assistant.
 - **Repository state:** add a file with a fake AWS key:
   ```bash
-  cd /tmp/gc-demo/campus-events
-  printf 'const awsKeyId = "AKIA%s";\n' ZZ9Q4K2M7T1B8R3W > src/config.js
+  cd /tmp/gc-demo/campus-events && printf 'const awsKeyId = "AKIA%s";\n' ZZ9Q4K2M7T1B8R3W > src/config.js
   ```
 - **Actions:** type `Save my changes: add RSVP` and press **Ask**.
 - **Must be visible:** the red section "Blocked: Secret Guard stopped this commit" with the reason naming
@@ -199,9 +209,7 @@ Press **Cancel**. Do not acknowledge here.
 - **Tab:** Safety.
 - **Repository state:** keep `src/config.js` from shot 06 (not staged) and add a staged `.env`:
   ```bash
-  cd /tmp/gc-demo/campus-events
-  printf 'AWS_ACCESS_KEY_ID=AKIA%s\n' ZZ9Q4K2M7T1B8R3W > .env
-  git add .env
+  cd /tmp/gc-demo/campus-events && printf 'AWS_ACCESS_KEY_ID=AKIA%s\n' ZZ9Q4K2M7T1B8R3W > .env && git add .env
   ```
 - **Actions:** none (wait up to four seconds for the tab to refresh).
 - **Must be visible:** the Secret Guard card with "2 high-severity findings will block a commit." and the
