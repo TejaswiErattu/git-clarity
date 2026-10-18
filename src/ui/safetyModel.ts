@@ -67,7 +67,8 @@ export function severityLabel(severity: SecretSeverity): string {
 	}
 }
 
-function toView(finding: SecretFinding, isAcknowledged: (key: string) => boolean): SafetyFindingView {
+/** One finding as the UI shows it: guidance from fixGuidanceFor, identity from buildIgnoreKey. */
+export function toFindingView(finding: SecretFinding, isAcknowledged: (key: string) => boolean): SafetyFindingView {
 	const key = buildIgnoreKey(finding);
 	const guidance = fixGuidanceFor(finding);
 	return {
@@ -106,7 +107,7 @@ function section(outcome: ScanOutcome, isAcknowledged: (key: string) => boolean,
 		return { findings: [], scannedFileCount: 0, error: firstLine(outcome) };
 	}
 	const findings = outcome.findings
-		.map(f => toView(f, isAcknowledged))
+		.map(f => toFindingView(f, isAcknowledged))
 		.filter(f => !skipKeys.has(f.key))
 		.sort(compareFindings);
 	return { findings, scannedFileCount: outcome.scannedFileCount };

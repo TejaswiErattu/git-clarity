@@ -170,6 +170,88 @@ pre {
 .blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
 .result-fail { color: var(--vscode-errorForeground); }
 .actions { margin-top: 12px; }
+.help-button { min-width: 28px; font-weight: 600; }
+.help-backdrop {
+	position: fixed;
+	inset: 0;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding: 24px 16px;
+	background: color-mix(in srgb, var(--vscode-editor-background) 75%, transparent);
+	z-index: 10;
+}
+.help-dialog {
+	width: 100%;
+	max-width: 640px;
+	max-height: calc(100vh - 48px);
+	overflow: auto;
+	padding: 16px 20px;
+	border-radius: 6px;
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-contrastBorder, var(--vscode-panel-border, currentColor)));
+	outline: 1px solid var(--vscode-contrastBorder, transparent);
+	box-shadow: 0 4px 16px var(--vscode-widget-shadow, transparent);
+}
+.help-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.help-head h2 { font-size: 1.2em; margin: 0; }
+.help-close { font-size: 1.2em; line-height: 1; padding: 2px 10px; }
+dl.help-tabs { margin: 0 0 8px; }
+dl.help-tabs dt { font-weight: 600; margin-top: 8px; }
+dl.help-tabs dd { margin: 2px 0 0 0; }
+ul.help-intents { list-style: none; margin: 0; padding: 0; }
+ul.help-intents li { padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border, transparent); }
+ul.help-intents li:last-child { border-bottom: none; }
+.sync {
+	border: 1px solid var(--vscode-panel-border, transparent);
+	border-left-width: 4px;
+	border-radius: 4px;
+	padding: 8px 12px;
+	margin-bottom: 12px;
+}
+.sync.tone-ok { border-left-color: var(--vscode-testing-iconPassed, currentColor); }
+.sync.tone-info { border-left-color: var(--vscode-focusBorder, currentColor); }
+.sync.tone-warn { border-left-color: var(--vscode-editorWarning-foreground, currentColor); }
+.tags { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.stage, .tag {
+	white-space: nowrap;
+	font-size: 0.85em;
+	padding: 0 8px;
+	border-radius: 10px;
+	border: 1px solid currentColor;
+}
+.stage-staged { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+.stage-partly, .stage-unstaged { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.stage-untracked { color: var(--vscode-descriptionForeground); }
+.stage-conflict { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.tag-current { color: var(--vscode-textLink-foreground, var(--vscode-foreground)); }
+.tag-default { color: var(--vscode-descriptionForeground); }
+ul.legend { list-style: none; margin: 8px 0 0; padding: 0; color: var(--vscode-descriptionForeground); }
+ul.legend li { margin: 2px 0; }
+.branch {
+	border: 1px solid var(--vscode-panel-border, transparent);
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 10px 0;
+}
+.branch.current { border-left: 3px solid var(--vscode-focusBorder, currentColor); }
+.branch-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.branch-head h3 { margin: 0; word-break: break-all; }
+h3.day { margin-top: 14px; }
+ul.commits { list-style: none; margin: 0; padding: 0; }
+ul.commits li.commit { padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border, transparent); }
+ul.commits li.commit:last-child { border-bottom: none; }
+.commit-message { word-break: break-word; }
+.blocked-section {
+	border: 1px solid var(--vscode-errorForeground, currentColor);
+	border-left-width: 4px;
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 0 0 12px;
+	background: var(--vscode-inputValidation-errorBackground, transparent);
+}
+.blocked-section > h3 { color: var(--vscode-errorForeground); margin-top: 0; }
 .severity {
 	display: inline-block;
 	font-weight: 600;
@@ -217,15 +299,56 @@ button.link:hover { color: var(--vscode-textLink-activeForeground); }
  *   assistantAsk     { text }                     Ask, Enter in the box, or an auto-submit chip
  *   assistantConfirm { previewId }                Confirm on the preview with that id
  *   assistantCancel  {}                           Cancel, or "Ask something else"
+ *   assistantBackToPlan {}                        "Back to plan" on a Not saved result
  *   safetyAcknowledge / safetyUnacknowledge { key }   Acknowledge or Undo on a Secret Guard finding
  *   safetyAddToGitignore { file }                     Add to .gitignore on a finding that allows it
  *   openFile         { file, line }               a finding's file:line link
+ *   showHelp / hideHelp {}                       the ? button, Got it, ×, or Escape
+ * When the help dialog is open, focus starts inside it and Tab stays inside it. Closing it
+ * returns focus to the ? button (remembered with the webview state across the re-render).
  * A chip that needs more typing only fills the box and focuses it.
  */
 export function clientScript(): string {
 	return `
 (function () {
 	var vscode = acquireVsCodeApi();
+	function helpDialog() { return document.querySelector('.help-dialog'); }
+	function focusables(root) {
+		return Array.prototype.slice.call(root.querySelectorAll('button:not([disabled]), [href], input, [tabindex]:not([tabindex="-1"])'));
+	}
+	function hideHelp() {
+		vscode.setState(Object.assign({}, vscode.getState() || {}, { returnFocus: 'help' }));
+		vscode.postMessage({ type: 'hideHelp' });
+	}
+	(function restoreFocus() {
+		var dialog = helpDialog();
+		var saved = vscode.getState() || {};
+		if (dialog) {
+			var first = focusables(dialog)[0];
+			if (first) { first.focus(); }
+		} else if (saved.returnFocus === 'help') {
+			var helpButton = document.querySelector('[data-action="show-help"]');
+			if (helpButton) { helpButton.focus(); }
+			vscode.setState(Object.assign({}, saved, { returnFocus: undefined }));
+		}
+	})();
+	document.addEventListener('keydown', function (event) {
+		var dialog = helpDialog();
+		if (!dialog) { return; }
+		if (event.key === 'Escape') { event.preventDefault(); hideHelp(); return; }
+		if (event.key !== 'Tab') { return; }
+		var items = focusables(dialog);
+		if (items.length === 0) { return; }
+		var first = items[0];
+		var last = items[items.length - 1];
+		if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+			event.preventDefault();
+			first.focus();
+		}
+	});
 	function assistantBox() { return document.querySelector('input[data-input="assistant"]'); }
 	function ask(text) {
 		var box = assistantBox();
@@ -251,11 +374,14 @@ export function clientScript(): string {
 		}
 		var action = target.getAttribute('data-action');
 		if (action === 'refresh') { vscode.postMessage({ type: 'refresh' }); }
+		if (action === 'show-help') { vscode.postMessage({ type: 'showHelp' }); }
+		if (action === 'hide-help') { hideHelp(); }
 		if (action === 'assistant-ask') { var box = assistantBox(); ask(box ? box.value : ''); }
 		if (action === 'assistant-confirm') {
 			vscode.postMessage({ type: 'assistantConfirm', previewId: Number(target.getAttribute('data-preview-id')) });
 		}
 		if (action === 'assistant-cancel') { vscode.postMessage({ type: 'assistantCancel' }); }
+		if (action === 'assistant-back') { vscode.postMessage({ type: 'assistantBackToPlan' }); }
 		if (action === 'safety-ack') { vscode.postMessage({ type: 'safetyAcknowledge', key: target.getAttribute('data-key') }); }
 		if (action === 'safety-unack') { vscode.postMessage({ type: 'safetyUnacknowledge', key: target.getAttribute('data-key') }); }
 		if (action === 'safety-gitignore') { vscode.postMessage({ type: 'safetyAddToGitignore', file: target.getAttribute('data-file') }); }

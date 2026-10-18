@@ -85,7 +85,8 @@ suite('render: dashboard HTML', () => {
 		assert.ok(html.includes('No commits yet'));
 		assert.ok(html.includes('role="tablist"'), 'tabs are still available');
 		assert.ok(html.includes('first.txt'));
-		assert.ok(html.includes('New file (not tracked yet)'));
+		assert.ok(html.includes('<span class="stage stage-untracked">Untracked</span>'));
+		assert.ok(html.includes('a new file Git is not keeping track of yet'));
 	});
 
 	test('overview shows repository name, branch, changed-file count and friendly labels', () => {
@@ -94,8 +95,9 @@ suite('render: dashboard HTML', () => {
 		assert.ok(html.includes('feature/login'));
 		assert.ok(html.includes('<div class="value">1</div>'));
 		assert.ok(html.includes('src/app.ts'));
-		assert.ok(html.includes('<span class="badge">Edited</span>'));
-		assert.ok(!html.includes('staged'), 'no Git jargon on the overview');
+		assert.ok(html.includes('<span class="badge">Modified</span>'));
+		assert.ok(html.includes('<span class="stage stage-unstaged">Not staged</span>'));
+		assert.ok(html.includes('changed, but not marked for the next commit yet'), 'staging is explained, not just named');
 	});
 
 	test('overview lists at most eight changed files and counts the rest', () => {
@@ -114,7 +116,7 @@ suite('render: dashboard HTML', () => {
 		assert.ok(synced.includes('In sync with the remote'));
 		assert.ok(synced.includes('Nothing has changed since your last save'));
 		const diverged = render({ snapshot: makeSnapshot({ aheadBehind: { ahead: 2, behind: 1, hasUpstream: true } }) });
-		assert.ok(diverged.includes('2 to push, 1 to pull'));
+		assert.ok(diverged.includes('2 commits to upload and 1 to download.'));
 		const detached = render({ snapshot: makeSnapshot({ isDetached: true, currentBranch: 'abc1234 (detached)' }) });
 		assert.ok(detached.includes('Not on a branch right now'));
 	});
@@ -151,7 +153,7 @@ suite('render: dashboard HTML', () => {
 		assert.ok(!html.includes('demo-repo'), 'the fixture name is not used');
 		assert.ok(html.includes('main'));
 		assert.ok(html.includes('README.md'));
-		assert.ok(html.includes('<span class="badge">Edited</span>'));
+		assert.ok(html.includes('<span class="badge">Modified</span>'));
 	});
 
 	test('repository-derived text is escaped so it cannot inject markup', () => {

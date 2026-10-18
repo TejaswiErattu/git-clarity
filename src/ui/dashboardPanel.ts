@@ -12,10 +12,11 @@ import * as vscode from 'vscode';
 import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
-import { AcknowledgedStore, addToGitignore } from '../safety/secretGuard';
-import { ask, AssistantDeps, AssistantState, cancel, confirm, initialAssistantState } from './assistantController';
+import { AcknowledgedStore, addToGitignore, checkCommitGuard, MementoLike } from '../safety/secretGuard';
+import { ask, AssistantDeps, AssistantState, backToPlan, cancel, confirm, initialAssistantState, refreshPreview } from './assistantController';
+import { hasSeenHelp, markHelpSeen } from './firstRun';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
-import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyView } from './safetyModel';
+import { findFindingByFile, findFindingByKey, findGitignoreCandidate, runSafetyScan, SafetyFindingView, SafetyView } from './safetyModel';
 
 export const POLL_INTERVAL_MS = 4000;
 
@@ -26,6 +27,9 @@ type WebviewMessage =
 	| { type: 'assistantAsk'; text: unknown }
 	| { type: 'assistantConfirm'; previewId: unknown }
 	| { type: 'assistantCancel' }
+	| { type: 'assistantBackToPlan' }
+	| { type: 'showHelp' }
+	| { type: 'hideHelp' }
 	| { type: 'safetyAcknowledge'; key: unknown }
 	| { type: 'safetyUnacknowledge'; key: unknown }
 	| { type: 'safetyAddToGitignore'; file: unknown }
@@ -43,6 +47,8 @@ export class DashboardPanel {
 	private safety: SafetyView | undefined;
 	private lastRendered = '';
 	private renderPending = false;
+	/** First-run help overlay. Opens automatically until this workspace dismisses it once. */
+	private helpOpen: boolean;
 
 	static createOrShow(context: vscode.ExtensionContext, store: AcknowledgedStore): DashboardPanel {
 		if (DashboardPanel.current) {
@@ -53,19 +59,38 @@ export class DashboardPanel {
 			enableScripts: true,
 			retainContextWhenHidden: true
 		});
-		DashboardPanel.current = new DashboardPanel(panel, store);
+		DashboardPanel.current = new DashboardPanel(panel, store, context.workspaceState);
 		context.subscriptions.push(DashboardPanel.current);
 		return DashboardPanel.current;
 	}
 
 	private constructor(
 		private readonly panel: vscode.WebviewPanel,
-		private readonly store: AcknowledgedStore
+		private readonly store: AcknowledgedStore,
+		private readonly workspaceState: MementoLike
 	) {
+		this.helpOpen = !hasSeenHelp(workspaceState);
 		this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
 		this.panel.webview.onDidReceiveMessage((message: WebviewMessage) => this.handleMessage(message), undefined, this.disposables);
 		this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
-		this.refresh();
+		this.refresh(true);
+	}
+
+	/** Used by gitClarity.resetFirstRun: show the overlay now if the dashboard is open. */
+	static showHelpIfOpen(): void {
+		if (DashboardPanel.current) {
+			DashboardPanel.current.panel.reveal();
+			DashboardPanel.current.setHelpOpen(true);
+		}
+	}
+
+	/** Dismissing the overlay is what counts as "seen", so closing the panel first shows it again next time. */
+	private async setHelpOpen(open: boolean): Promise<void> {
+		this.helpOpen = open;
+		this.render(true);
+		if (!open) {
+			await markHelpSeen(this.workspaceState);
+		}
 	}
 
 	private handleMessage(message: WebviewMessage): void {
@@ -96,6 +121,15 @@ export class DashboardPanel {
 			case 'assistantCancel':
 				this.updateAssistant(cancel(this.assistant));
 				return;
+			case 'showHelp':
+				void this.setHelpOpen(true);
+				return;
+			case 'hideHelp':
+				void this.setHelpOpen(false);
+				return;
+			case 'assistantBackToPlan':
+				this.updateAssistant(backToPlan(this.assistant, this.assistantDeps()));
+				return;
 			case 'safetyAcknowledge':
 				void this.setAcknowledged(message.key, true);
 				return;
@@ -122,12 +156,22 @@ export class DashboardPanel {
 		this.safety = { ...runSafetyScan(cwd, this.store), notice: notice ?? this.safety?.notice };
 	}
 
-	/** Acknowledge only a finding on screen; undo only a key that is actually acknowledged. */
+	/** Findings the Assistant is showing in a blocked commit preview. */
+	private assistantFindings(): SafetyFindingView[] {
+		return this.assistant.phase === 'preview' ? this.assistant.guard?.findings ?? [] : [];
+	}
+
+	/**
+	 * Acknowledge only a finding on screen (Safety tab or the Assistant's blocked preview);
+	 * undo only a key that is actually acknowledged. Then rebuild an open Assistant preview,
+	 * so acknowledging unblocks it and undoing blocks it again.
+	 */
 	private async setAcknowledged(key: unknown, acknowledged: boolean): Promise<void> {
 		if (typeof key !== 'string') {
 			return;
 		}
-		if (acknowledged && findFindingByKey(this.safety, key)) {
+		const onScreen = findFindingByKey(this.safety, key) || this.assistantFindings().some(f => f.key === key);
+		if (acknowledged && onScreen) {
 			await this.store.acknowledge(key);
 		} else if (!acknowledged && this.store.isAcknowledged(key)) {
 			await this.store.unacknowledge(key);
@@ -135,6 +179,7 @@ export class DashboardPanel {
 			return;
 		}
 		this.scanSafetyIfVisible();
+		this.assistant = refreshPreview(this.assistant, this.assistantDeps());
 		this.render();
 	}
 
@@ -162,7 +207,8 @@ export class DashboardPanel {
 	/** Opens a finding's file at its line. Only files listed on screen, only inside the workspace. */
 	private async openFinding(file: unknown, line: unknown): Promise<void> {
 		const cwd = this.workspaceFolder();
-		if (typeof file !== 'string' || !cwd || !findFindingByFile(this.safety, file)) {
+		const onScreen = typeof file === 'string' && (findFindingByFile(this.safety, file) || this.assistantFindings().some(f => f.file === file));
+		if (typeof file !== 'string' || !cwd || !onScreen) {
 			return;
 		}
 		const root = path.resolve(cwd);
@@ -187,7 +233,8 @@ export class DashboardPanel {
 			cwd: this.workspaceFolder(),
 			readSnapshot: () => this.readSnapshot(),
 			buildPlan: (match, cwd, snapshot) => buildActionPlan(match, cwd, snapshot, { acknowledged }),
-			execute: (match, cwd) => executeAction(match, cwd, { acknowledged })
+			execute: (match, cwd) => executeAction(match, cwd, { acknowledged }),
+			checkGuard: cwd => checkCommitGuard(cwd, acknowledged)
 		};
 	}
 
@@ -226,10 +273,10 @@ export class DashboardPanel {
 		}
 	}
 
-	private refresh(): void {
+	private refresh(force = false): void {
 		this.snapshot = this.readSnapshot();
 		this.scanSafetyIfVisible();
-		this.render();
+		this.render(force);
 	}
 
 	private workspaceFolder(): string | undefined {
@@ -248,8 +295,12 @@ export class DashboardPanel {
 		}
 	}
 
-	private render(): void {
-		if (this.inputFocused) {
+	/**
+	 * Skipped while typing or while the help dialog is open, so a poll never steals focus.
+	 * `force` is for explicit actions that must show their result (help open/close, first paint).
+	 */
+	private render(force = false): void {
+		if (!force && (this.inputFocused || this.helpOpen)) {
 			this.renderPending = true;
 			return;
 		}
@@ -258,7 +309,8 @@ export class DashboardPanel {
 			activeTab: this.activeTab,
 			assistant: this.assistant,
 			acknowledgedCount: this.store.keys().length,
-			safety: this.safety
+			safety: this.safety,
+			helpOpen: this.helpOpen
 		};
 		const serialized = JSON.stringify(state);
 		if (serialized === this.lastRendered) {
