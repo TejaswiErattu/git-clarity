@@ -12,7 +12,7 @@ import * as vscode from 'vscode';
 import { buildActionPlan, executeAction } from '../git/gitActions';
 import { emptySnapshot, getRepoSnapshot } from '../git/gitCommands';
 import { RepoSnapshot } from '../git/types';
-import { AcknowledgedStore, addToGitignore, checkCommitGuard, MementoLike } from '../safety/secretGuard';
+import { AcknowledgedStore, checkCommitGuard, ignoreAndUntrack, MementoLike } from '../safety/secretGuard';
 import { ask, AssistantDeps, AssistantState, backToPlan, cancel, confirm, initialAssistantState, refreshPreview } from './assistantController';
 import { hasSeenHelp, markHelpSeen } from './firstRun';
 import { DashboardState, isTabId, renderDashboardHtml, TabId } from './render';
@@ -190,12 +190,7 @@ export class DashboardPanel {
 		}
 		let notice: string;
 		try {
-			const result = addToGitignore(cwd, file);
-			notice = result.added ? `Added ${file} to .gitignore.` : `${file} is already in .gitignore.`;
-			const tracked = !this.snapshot?.changedFiles.some(f => f.path === file && f.status === '??');
-			if (tracked) {
-				notice += ' Git still tracks this file. .gitignore only stops new files from being added, so ask a teammate how to stop tracking it.';
-			}
+			notice = ignoreAndUntrack(cwd, file).message;
 		} catch (err) {
 			notice = `Couldn't update .gitignore: ${err instanceof Error ? err.message : String(err)}`;
 		}
