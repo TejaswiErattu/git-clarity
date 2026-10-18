@@ -170,6 +170,46 @@ pre {
 .blocked { border-left-color: var(--vscode-errorForeground, currentColor); background: var(--vscode-inputValidation-errorBackground, transparent); }
 .result-fail { color: var(--vscode-errorForeground); }
 .actions { margin-top: 12px; }
+.sync {
+	border: 1px solid var(--vscode-panel-border, transparent);
+	border-left-width: 4px;
+	border-radius: 4px;
+	padding: 8px 12px;
+	margin-bottom: 12px;
+}
+.sync.tone-ok { border-left-color: var(--vscode-testing-iconPassed, currentColor); }
+.sync.tone-info { border-left-color: var(--vscode-focusBorder, currentColor); }
+.sync.tone-warn { border-left-color: var(--vscode-editorWarning-foreground, currentColor); }
+.tags { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.stage, .tag {
+	white-space: nowrap;
+	font-size: 0.85em;
+	padding: 0 8px;
+	border-radius: 10px;
+	border: 1px solid currentColor;
+}
+.stage-staged { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+.stage-partly, .stage-unstaged { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.stage-untracked { color: var(--vscode-descriptionForeground); }
+.stage-conflict { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.tag-current { color: var(--vscode-textLink-foreground, var(--vscode-foreground)); }
+.tag-default { color: var(--vscode-descriptionForeground); }
+ul.legend { list-style: none; margin: 8px 0 0; padding: 0; color: var(--vscode-descriptionForeground); }
+ul.legend li { margin: 2px 0; }
+.branch {
+	border: 1px solid var(--vscode-panel-border, transparent);
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 10px 0;
+}
+.branch.current { border-left: 3px solid var(--vscode-focusBorder, currentColor); }
+.branch-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.branch-head h3 { margin: 0; word-break: break-all; }
+h3.day { margin-top: 14px; }
+ul.commits { list-style: none; margin: 0; padding: 0; }
+ul.commits li.commit { padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border, transparent); }
+ul.commits li.commit:last-child { border-bottom: none; }
+.commit-message { word-break: break-word; }
 .blocked-section {
 	border: 1px solid var(--vscode-errorForeground, currentColor);
 	border-left-width: 4px;
